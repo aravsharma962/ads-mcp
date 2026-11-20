@@ -119,8 +119,13 @@ class SupabaseStore:
     """Asli store. SUPABASE_URL aur SUPABASE_SERVICE_ROLE_KEY chahiye (service role sirf server par)."""
 
     def __init__(self):
-        from supabase import create_client
-        self.db = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_ROLE_KEY"])
+        from supabase import ClientOptions, create_client
+        url, key = os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+        try:
+            # HTTP/2 serverless (Vercel) par StreamReset deta hai, isliye HTTP/1.1.
+            self.db = create_client(url, key, options=ClientOptions(httpx_client=httpx.Client(http2=False)))
+        except TypeError:          # purana supabase version jisme httpx_client option nahi
+            self.db = create_client(url, key)
 
     @db_call(retry=False)
     def create_tenant(self, name: str, plan: str = "free") -> Tenant:

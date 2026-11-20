@@ -94,6 +94,14 @@ def test_calls_do_not_overlap_across_threads():
     assert f.max_active == 1, f.max_active
 
 
+def test_supabase_store_uses_http1_not_http2():
+    os.environ["SUPABASE_URL"] = "https://abcdefghijklmnop.supabase.co"
+    os.environ["SUPABASE_SERVICE_ROLE_KEY"] = "a.b.c"
+    from store import SupabaseStore
+    pool = SupabaseStore().db.postgrest.session._transport._pool
+    assert pool._http2 is False, "HTTP/2 band hona chahiye (Vercel par StreamReset deta hai)"
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

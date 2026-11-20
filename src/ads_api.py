@@ -9,7 +9,9 @@ import requests
 from dotenv import load_dotenv
 
 # .env repo ke root mein hai (src ke ek level upar).
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+# utf-8-sig: Notepad kabhi file ke shuru mein chhupa BOM daal deta hai, usse bhi padh leta hai.
+ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(ENV_PATH, encoding="utf-8-sig")
 
 VALID_PRESETS = {
     "today", "yesterday", "last_7d", "last_14d", "last_30d", "this_month", "last_month",
@@ -24,8 +26,12 @@ def _config() -> tuple[str, str, str]:
     token = os.environ.get("META_ACCESS_TOKEN")
     account = os.environ.get("META_AD_ACCOUNT_ID")
     version = os.environ.get("META_API_VERSION", "v27.0")
-    if not token or not account:
-        raise MetaError("META_ACCESS_TOKEN ya META_AD_ACCOUNT_ID .env mein nahi mila")
+    missing = [n for n, v in (("META_ACCESS_TOKEN", token), ("META_AD_ACCOUNT_ID", account)) if not v]
+    if missing:
+        # Sirf naam aur path batate hain, token ki value kabhi nahi.
+        raise MetaError(
+            f"Missing: {missing}. .env path: {ENV_PATH} (file maujood: {ENV_PATH.exists()})"
+        )
     return token, account, version
 
 

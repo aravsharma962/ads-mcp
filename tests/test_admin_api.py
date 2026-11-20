@@ -157,16 +157,20 @@ def main():
         # --- store crash: admin ko error ka type/detail dikhe, bina login ke nahi ---
         c3 = TestClient(hosted_app.app, base_url="http://localhost", raise_server_exceptions=False)
         orig = store.list_tenants
-        store.list_tenants = lambda: (_ for _ in ()).throw(RuntimeError("supabase down: boom-detail"))
+        os.environ["SUPABASE_SERVICE_ROLE_KEY"] = "sb_secret_LEAKME1234567\nTOKEN_ENC_KEY=LEAKME-ENC-7654321"
+        store.list_tenants = lambda: (_ for _ in ()).throw(
+            RuntimeError("Illegal header value b'" + os.environ["SUPABASE_SERVICE_ROLE_KEY"] + "' boom-detail"))
         try:
             admin_auth.limiter.reset("testclient")
             assert c3.post("/admin/api/login", json={"password": os.environ["ADMIN_PASSWORD"]}, headers=X).status_code == 200
             r = c3.get("/admin/api/tenants")
             assert r.status_code == 500 and r.json()["type"] == "RuntimeError", r.text
             assert "boom-detail" in r.json()["detail"]
+            assert "LEAKME" not in r.text and "***" in r.json()["detail"], r.text       # secrets redact
             r = TestClient(hosted_app.app, base_url="http://localhost", raise_server_exceptions=False).get("/admin/api/tenants")
             assert r.status_code == 401        # bina login ke 401, detail nahi
         finally:
+            os.environ.pop("SUPABASE_SERVICE_ROLE_KEY", None)
             store.list_tenants = orig
         print("OK  store crash -> 500 JSON {type, detail} sirf logged-in admin ko")
 

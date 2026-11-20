@@ -5,6 +5,7 @@ Raw API key sirf create-key response me aati hai; token kabhi kisi response me n
 """
 import os
 import re
+import sys
 import traceback
 from pathlib import Path
 
@@ -173,12 +174,26 @@ async def remove_connection(request: Request):
     return JSONResponse({"ok": True}) if ok else _err(404, "Account nahi mila")
 
 
+SECRET_ENV = ("SUPABASE_SERVICE_ROLE_KEY", "TOKEN_ENC_KEY", "ADMIN_PASSWORD", "ADMIN_SESSION_SECRET",
+              "HUB_SERVICE_SECRET")
+
+
+def redact(text: str) -> str:
+    """Env secrets (poori value aur uski har line) error text se hata do."""
+    for name in SECRET_ENV:
+        v = os.environ.get(name, "")
+        for piece in [v] + v.splitlines():
+            if len(piece.strip()) >= 8:
+                text = text.replace(piece.strip(), "***")
+    return text
+
+
 async def on_error(request: Request, exc: Exception):
     """Store/Supabase crash: traceback logs me, aur sirf logged-in admin ko error ka type + detail."""
-    traceback.print_exception(exc)
+    print(redact("".join(traceback.format_exception(exc))), file=sys.stderr)      # logs me bhi secrets nahi
     body = {"error": "Server error"}
     if admin_auth.verify_session(request.cookies.get("admin_session")):
-        body.update(type=type(exc).__name__, detail=str(exc)[:500])
+        body.update(type=type(exc).__name__, detail=redact(str(exc))[:500])
     return JSONResponse(body, status_code=500)
 
 

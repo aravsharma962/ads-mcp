@@ -60,7 +60,8 @@ with patch("ads_api.requests.get", side_effect=fake_get):
         print("OK  no key / wrong key -> 401")
         # 2. Tools list
         names = [t["name"] for t in rpc(c, "tools/list", key=key_a).json()["result"]["tools"]]
-        assert set(names) == {"list_my_accounts", "meta_campaign_insights", "meta_check_targets"}, names
+        assert set(names) == {"list_my_accounts", "meta_campaign_insights", "meta_check_targets", "meta_ads_insights",
+                     "ads_performance"}, names
         assert not any("tenant" in json.dumps(t["inputSchema"]) for t in rpc(c, "tools/list", key=key_a).json()["result"]["tools"])
         print("OK  tools:", names, "(koi tenant_id argument nahi)")
         # 3. Har tenant apni list dekhta hai
@@ -78,7 +79,7 @@ with patch("ads_api.requests.get", side_effect=fake_get):
         # 5. ISOLATION: A, B ka account maange to deny
         n_calls = len(seen_tokens)
         out = call(c, "meta_campaign_insights", {"external_id": "act_222"}, key_a)
-        assert out == {"error": "Is account par aapka access nahi hai."}, out
+        assert out == {"error": "You do not have access to this account."}, out
         out2 = call(c, "meta_campaign_insights", {"external_id": "act_999_not_exists"}, key_a)
         assert out2 == out   # exist karta hai ya nahi, same jawab
         assert len(seen_tokens) == n_calls, "Meta ko call nahi jaani chahiye thi"

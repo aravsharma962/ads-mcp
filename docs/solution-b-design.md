@@ -58,3 +58,6 @@ Agency Claude me connector add kare: https://<app>.vercel.app/mcp + header Autho
 ## Admin panel notes
 - Logout cookie client se hatata hai; session stateless hai, isliye chori hui cookie 8h tak chalti hai. Turant band karna ho to ADMIN_SESSION_SECRET badal do.
 - Login rate limit: 5 galat/IP/15 min, aur sab IP milakar 50. Serverless me har instance ka apna count hai (best-effort). Attack me asli admin bhi 15 min lock ho sakta hai.
+
+## SaaS platform
+Deployment of the web app, hub internal API and tracking: see [deploy-saas.md](deploy-saas.md).

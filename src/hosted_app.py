@@ -12,7 +12,9 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 import admin_app
 import admin_auth
-from ads_api import MetaError, get_meta_campaigns
+import internal_api
+from ads_api import MetaError, get_meta_campaigns, get_meta_insights
+from performance import DENIED, performance_for_client
 from store import get_store
 from targets import check_campaign
 from tenancy import current_tenant, norm_account, reset_current, set_current
@@ -39,7 +41,7 @@ def _meta_rows(tool: str, external_id: str, date_preset: str):
     if token is None:
         store.log_audit(tenant.id, tenant.key_label, tool, args, "denied")
         # Wahi message chahe account exist kare ya na kare, taaki doosre tenants ke IDs ka pata na chale.
-        return None, {"error": "Is account par aapka access nahi hai."}
+        return None, {"error": "You do not have access to this account."}
     try:
         rows = get_meta_campaigns(date_preset, token=token, account=account)
     except MetaError as e:
@@ -56,7 +58,7 @@ def list_my_accounts() -> list[dict] | dict:
     store = get_store()
     accounts = store.list_connections(tenant.id)
     store.log_audit(tenant.id, tenant.key_label, "list_my_accounts", {}, "ok")
-    return accounts or {"message": "Abhi koi ad account juda nahi hai."}
+    return accounts or {"message": "No ad account is connected yet."}
 
 
 @mcp.tool()
@@ -70,7 +72,54 @@ def meta_campaign_insights(external_id: str, date_preset: str = "last_7d") -> li
     rows, err = _meta_rows("meta_campaign_insights", external_id, date_preset)
     if err:
         return err
-    return rows or {"message": "Is period mein koi campaign data nahi mila (spend 0 ho sakta hai)."}
+    return rows or {"message": "No campaign data found for this period (spend may be 0)."}
+
+
+@mcp.tool()
+def meta_ads_insights(external_id: str, date_from: str, date_to: str, level: str = "campaign") -> dict:
+    """Detailed performance of one Meta ad account at campaign, adset or ad level for a date range.
+
+    external_id: ad account ID (from list_my_accounts). date_from/date_to: YYYY-MM-DD.
+    level: campaign, adset or ad. Rows contain spend, impressions, link_clicks, landing_page_views,
+    add_to_cart, purchases, purchase_value and ctr/cpc/cpm/roas (null when the denominator is 0).
+    Read-only: changes nothing.
+    """
+    tenant = current_tenant()
+    store = get_store()
+    account = norm_account(external_id)
+    args = {"external_id": account, "date_from": date_from, "date_to": date_to, "level": level}
+    token = store.get_token(tenant.id, "meta", account)
+    if token is None:
+        store.log_audit(tenant.id, tenant.key_label, "meta_ads_insights", args, "denied")
+        return {"error": "You do not have access to this account."}
+    try:
+        out = get_meta_insights(date_from, date_to, level, token=token, account=account)
+    except MetaError as e:
+        store.log_audit(tenant.id, tenant.key_label, "meta_ads_insights", args, "error")
+        return {"error": str(e)}
+    store.log_audit(tenant.id, tenant.key_label, "meta_ads_insights", args, "ok")
+    return out
+
+
+@mcp.tool()
+def ads_performance(client_id: str, date_from: str, date_to: str, level: str = "ad") -> dict:
+    """Meta performance plus website tracking (sessions, add-to-cart, conversions) for one client.
+
+    client_id: the agency's client ID. date_from/date_to: YYYY-MM-DD. level: campaign, adset or ad.
+    Rows contain the Meta numbers plus sessions, add_to_cart_sessions, conversion_sessions, tracked_value,
+    visit_rate, add_to_cart_rate, conversion_rate (against link clicks) and tracked_roas. Rates are null
+    when the denominator is 0. 'unattributed' holds sessions not linked to any ad. Read-only.
+    """
+    tenant = current_tenant()
+    store = get_store()
+    args = {"client_id": client_id, "date_from": date_from, "date_to": date_to, "level": level}
+    out = performance_for_client(store, tenant.id, client_id, date_from, date_to, level,
+                                 lambda account: store.get_token(tenant.id, "meta", account))
+    result = "ok"
+    if "error" in out:
+        result = "denied" if out == DENIED else "error"
+    store.log_audit(tenant.id, tenant.key_label, "ads_performance", args, result)
+    return out
 
 
 @mcp.tool()
@@ -84,7 +133,7 @@ def meta_check_targets(external_id: str, date_preset: str = "last_7d") -> list[d
     if err:
         return err
     if not rows:
-        return {"message": "Is period mein koi campaign data nahi mila (spend 0 ho sakta hai)."}
+        return {"message": "No campaign data found for this period (spend may be 0)."}
     return [check_campaign(r) for r in rows]
 
 
@@ -108,6 +157,10 @@ class TenantAuth:
             if not admin_auth.admin_enabled():                  # band hai to har /admin path 404
                 return await self._json(send, 404, {"error": "Not found"})
             return await admin_app.app(scope, receive, send)   # apna password+cookie auth
+        if scope["path"] == "/internal" or scope["path"].startswith("/internal/"):
+            if not internal_api.service_enabled():              # secret set nahi to 404
+                return await self._json(send, 404, {"error": "Not found"})
+            return await internal_api.app(scope, receive, send)   # apna secret + tenant header auth
         if scope["path"] == "/health":
             return await self._json(send, 200, {"status": "ok"})
 

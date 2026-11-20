@@ -2,7 +2,8 @@
 import os
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import functools
 
@@ -32,6 +33,28 @@ def db_call(retry: bool):
     return deco
 
 
+DEFAULT_CONVERSION_EVENTS = ["purchase", "form_submit"]
+EVENT_FIELDS = "session_id, name, campaign_id, adset_id, ad_id, value, ts"
+
+
+def date_bounds(date_from: str, date_to: str, tz_name: str | None) -> tuple[datetime, datetime]:
+    """[start, end) UTC datetimes: date_from 00:00 se date_to ke poore din tak, client ke timezone mein."""
+    try:
+        tz = ZoneInfo(tz_name) if tz_name else timezone.utc
+    except Exception:
+        tz = timezone.utc
+    start = datetime.combine(date.fromisoformat(date_from), time.min, tzinfo=tz)
+    end = datetime.combine(date.fromisoformat(date_to) + timedelta(days=1), time.min, tzinfo=tz)
+    return start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+
+
+def _parse_ts(ts) -> datetime:
+    if isinstance(ts, datetime):
+        return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+    dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
 class InMemoryStore:
     """Sirf test/local ke liye. Restart par sab ud jaata hai."""
 
@@ -41,6 +64,10 @@ class InMemoryStore:
         self.keys: list[dict] = []
         self.conns: list[dict] = []
         self.audit: list[dict] = []
+        self.clients: list[dict] = []
+        self.client_accounts: list[dict] = []
+        self.sites: list[dict] = []
+        self.events: list[dict] = []
 
     def create_tenant(self, name: str, plan: str = "free") -> Tenant:
         tid = str(uuid.uuid4())
@@ -109,6 +136,42 @@ class InMemoryStore:
                     and c["external_id"] == external_id):
                 return decrypt(c["token_enc"])
         return None
+
+    # --- clients / tracking (reads for ads_performance; create_*/add_* sirf test/local helpers) ---
+    def create_client(self, tenant_id: str, name: str, currency: str, timezone: str = "UTC",
+                      roas_source: str = "tracking") -> dict:
+        c = {"id": str(uuid.uuid4()), "tenant_id": tenant_id, "name": name, "currency": currency,
+             "timezone": timezone, "roas_source": roas_source}
+        self.clients.append(c)
+        return dict(c)
+
+    def add_client_account(self, client_id: str, platform: str, external_id: str) -> None:
+        self.client_accounts.append({"client_id": client_id, "platform": platform, "external_id": external_id})
+
+    def add_event(self, client_id: str, session_id: str, name: str, ad_id=None, adset_id=None,
+                  campaign_id=None, value=None, ts=None) -> None:
+        self.events.append({"client_id": client_id, "session_id": session_id, "name": name, "ad_id": ad_id,
+                            "adset_id": adset_id, "campaign_id": campaign_id, "value": value,
+                            "ts": ts or datetime.now(timezone.utc).isoformat()})
+
+    def get_client(self, tenant_id: str, client_id: str) -> dict | None:
+        # Ownership check: tenant_id filter ke bina koi row nahi milti.
+        for c in self.clients:
+            if c["id"] == client_id and c["tenant_id"] == tenant_id:
+                return dict(c)
+        return None
+
+    def list_client_accounts(self, client_id: str) -> list[str]:
+        return [a["external_id"] for a in self.client_accounts
+                if a["client_id"] == client_id and a["platform"] == "meta"]
+
+    def events_summary(self, client_id: str, date_from: str, date_to: str, level: str) -> dict:
+        client = next((c for c in self.clients if c["id"] == client_id), None)
+        start, end = date_bounds(date_from, date_to, client["timezone"] if client else None)
+        evs = [{k: e.get(k) for k in ("session_id", "name", "campaign_id", "adset_id", "ad_id", "value")}
+               for e in self.events if e["client_id"] == client_id and start <= _parse_ts(e["ts"]) < end]
+        conv = sorted({x for s in self.sites if s["client_id"] == client_id for x in s["conversion_events"]})
+        return {"level": level, "events": evs, "conversion_events": conv or list(DEFAULT_CONVERSION_EVENTS)}
 
     def log_audit(self, tenant_id: str, actor: str, tool: str, args: dict, result: str) -> None:
         self.audit.append({"tenant_id": tenant_id, "actor": actor, "tool": tool,
@@ -197,6 +260,36 @@ class SupabaseStore:
                 .eq("tenant_id", tenant_id).eq("platform", platform)
                 .eq("external_id", external_id).limit(1).execute().data)
         return decrypt(rows[0]["token_enc"]) if rows else None
+
+    @db_call(retry=True)
+    def get_client(self, tenant_id: str, client_id: str) -> dict | None:
+        rows = (self.db.table("clients").select("id, tenant_id, name, currency, timezone, roas_source")
+                .eq("id", client_id).eq("tenant_id", tenant_id).limit(1).execute().data)
+        return rows[0] if rows else None
+
+    @db_call(retry=True)
+    def list_client_accounts(self, client_id: str) -> list[str]:
+        rows = (self.db.table("client_accounts").select("external_id")
+                .eq("client_id", client_id).eq("platform", "meta").execute().data)
+        return [r["external_id"] for r in rows]
+
+    @db_call(retry=True)
+    def events_summary(self, client_id: str, date_from: str, date_to: str, level: str) -> dict:
+        crow = self.db.table("clients").select("timezone").eq("id", client_id).limit(1).execute().data
+        start, end = date_bounds(date_from, date_to, crow[0]["timezone"] if crow else None)
+        evs, offset, page = [], 0, 1000
+        while True:             # PostgREST ek baar mein max 1000 rows deta hai
+            chunk = (self.db.table("events").select(EVENT_FIELDS).eq("client_id", client_id)
+                     .gte("ts", start.isoformat()).lt("ts", end.isoformat()).order("id")
+                     .range(offset, offset + page - 1).execute().data)
+            evs.extend({k: e.get(k) for k in ("session_id", "name", "campaign_id", "adset_id", "ad_id", "value")}
+                       for e in chunk)
+            if len(chunk) < page or offset >= 200_000:
+                break
+            offset += page
+        sites = self.db.table("sites").select("conversion_events").eq("client_id", client_id).execute().data
+        conv = sorted({x for s in sites for x in (s.get("conversion_events") or [])})
+        return {"level": level, "events": evs, "conversion_events": conv or list(DEFAULT_CONVERSION_EVENTS)}
 
     @db_call(retry=False)
     def log_audit(self, tenant_id: str, actor: str, tool: str, args: dict, result: str) -> None:

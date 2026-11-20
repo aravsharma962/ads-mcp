@@ -115,7 +115,7 @@ class TenantAuth:
         key = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
         tenant = await anyio.to_thread.run_sync(get_store().resolve_api_key, key) if key else None
         if tenant is None:
-            return await self._json(send, 401, {"error": "Invalid or missing API key"})
+            return await self._json(send, 401, {"error": "Invalid or missing API key", "path": scope["path"]})
 
         ctx = set_current(tenant)
         try:

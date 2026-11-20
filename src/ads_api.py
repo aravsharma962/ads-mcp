@@ -50,11 +50,15 @@ def _roas(purchase_roas) -> float:
     return _num(purchase_roas[0].get("value"))
 
 
-def get_meta_campaigns(date_preset: str = "last_7d") -> list[dict]:
+def get_meta_campaigns(date_preset: str = "last_7d", token: str | None = None,
+                       account: str | None = None, version: str | None = None) -> list[dict]:
+    """token/account na do to .env se lega (local stdio). Hosted server tenant ka token yahin pass karta hai."""
     if date_preset not in VALID_PRESETS:
         raise MetaError(f"date_preset galat hai. Chuno: {sorted(VALID_PRESETS)}")
 
-    token, account, version = _config()
+    if token is None or account is None:
+        token, account, version = _config()
+    version = version or os.environ.get("META_API_VERSION", "v27.0")
     resp = requests.get(
         f"https://graph.facebook.com/{version}/{account}/insights",
         # Token header mein bhejte hain, URL mein nahi, taaki error ya log mein leak na ho.

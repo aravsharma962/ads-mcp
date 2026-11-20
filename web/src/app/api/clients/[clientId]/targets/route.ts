@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { apiContext, getOwnedClient, json, notFound, readJson } from "@/lib/api";
-import { DEFAULT_TARGETS, METRIC_KEYS, type Band, type MetricKey } from "@/lib/metrics";
+import { ALL_METRIC_KEYS, defaultTargetsFor, metricsForType, type Band, type MetricKey } from "@/lib/metrics";
 import { loadTargets } from "@/lib/targets";
 
 type Ctx = { params: Promise<{ clientId: string }> };
@@ -10,7 +10,7 @@ const Body = z.union([
   z.object({ reset: z.literal(true) }),
   z.object({
     targets: z
-      .partialRecord(z.enum(METRIC_KEYS as [MetricKey, ...MetricKey[]]), z.object({ min: num, max: num }).strict())
+      .partialRecord(z.enum(ALL_METRIC_KEYS as [MetricKey, ...MetricKey[]]), z.object({ min: num, max: num }).strict())
   }),
 ]);
 
@@ -19,7 +19,7 @@ export async function GET(_req: Request, { params }: Ctx) {
   if (a instanceof Response) return a;
   const client = await getOwnedClient(a.db, a.ctx.tenantId, (await params).clientId);
   if (!client) return notFound();
-  return json({ targets: await loadTargets(a.db, client.id) });
+  return json({ targets: await loadTargets(a.db, client.id, client.business_type) });
 }
 
 export async function PUT(request: Request, { params }: Ctx) {
@@ -31,9 +31,11 @@ export async function PUT(request: Request, { params }: Ctx) {
   if (!parsed.success || ("targets" in parsed.data && Object.keys(parsed.data.targets).length === 0)) return json({ error: "Invalid targets." }, 400);
   let next: Partial<Record<MetricKey, Band>>;
   if ("reset" in parsed.data) {
-    next = DEFAULT_TARGETS;
+    next = defaultTargetsFor(client.business_type) as Partial<Record<MetricKey, Band>>;
   } else {
     next = parsed.data.targets as Partial<Record<MetricKey, Band>>;
+    const allowed = metricsForType(client.business_type);
+    if (Object.keys(next).some((k) => !allowed.includes(k as MetricKey))) return json({ error: "Invalid targets." }, 400);
     for (const b of Object.values(next)) {
       if (b && b.min !== null && b.max !== null && b.min > b.max) {
         return json({ error: "Minimum cannot be greater than maximum." }, 400);
@@ -50,5 +52,5 @@ export async function PUT(request: Request, { params }: Ctx) {
   }));
   const { error } = await a.db.from("targets").upsert(rows, { onConflict: "client_id,metric" });
   if (error) return json({ error: "Could not save targets." }, 500);
-  return json({ targets: await loadTargets(a.db, client.id) });
+  return json({ targets: await loadTargets(a.db, client.id, client.business_type) });
 }

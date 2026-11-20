@@ -14,6 +14,6 @@ export const STATUS_CLASS: Record<Status, string> = {
   no_data: "status-no_data bg-gray-100 text-gray-500",
 };
 
-export default function StatusBadge({ status }: { status: Status }) {
-  return <span className={`rounded px-2 py-0.5 text-xs ${STATUS_CLASS[status]}`}>{STATUS_LABEL[status]}</span>;
+export default function StatusBadge({ status, label }: { status: Status; label?: string }) {
+  return <span className={`rounded px-2 py-0.5 text-xs ${STATUS_CLASS[status]}`}>{label ?? STATUS_LABEL[status]}</span>;
 }

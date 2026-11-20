@@ -30,4 +30,26 @@ describe("TrackingSetup", () => {
     render(<TrackingSetup clientId="c1" appUrl="https://app.example" initialSite={null} initialHealth={null} canEdit={false} />);
     expect(screen.getByText(/Only the agency owner/)).toBeInTheDocument();
   });
+  it("lists the events to send for each business type", () => {
+    const ev = (type: "ecommerce" | "lead_gen" | "saas_b2b") => {
+      const { unmount } = render(<TrackingSetup clientId="c1" appUrl="https://app.example" initialSite={site} initialHealth={health} canEdit businessType={type} />);
+      const text = screen.getByTestId("events").textContent!;
+      unmount();
+      return text;
+    };
+    const eco = ev("ecommerce");
+    expect(eco).toContain("adsTrack('add_to_cart')");
+    expect(eco).toContain("adsTrack('purchase'");
+    expect(eco).not.toContain("adsTrack('signup')");
+    const lead = ev("lead_gen");
+    expect(lead).toContain("adsTrack('lead')");
+    expect(lead).not.toContain("adsTrack('purchase'");
+    const saas = ev("saas_b2b");
+    for (const e of ["signup", "trial_start", "demo_booked"]) expect(saas).toContain(`adsTrack('${e}')`);
+    expect(saas).toContain("adsTrack('paid'");
+  });
+  it("defaults to the e-commerce events", () => {
+    render(<TrackingSetup clientId="c1" appUrl="https://app.example" initialSite={site} initialHealth={health} canEdit />);
+    expect(screen.getByTestId("events").textContent).toContain("adsTrack('purchase'");
+  });
 });

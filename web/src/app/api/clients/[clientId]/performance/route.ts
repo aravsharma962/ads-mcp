@@ -20,7 +20,8 @@ export async function GET(request: Request, { params }: Ctx) {
   const accounts = ((accRows ?? []) as { external_id: string }[]).map((r) => r.external_id);
   const { data: site } = await a.db.from("sites").select("id").eq("client_id", client.id).maybeSingle();
   const tracking = !!site;
-  const src = { tracking, roasSource: client.roas_source };
+  const type = client.business_type;
+  const src = { tracking, roasSource: client.roas_source, type };
 
   let currency = client.currency;
   let rawRows: unknown[] = [];
@@ -50,5 +51,5 @@ export async function GET(request: Request, { params }: Ctx) {
   }
 
   const rows = rawRows.map((r) => normalizeRow(r, src));
-  return json({ currency, tracking, level, attribution: "account default", rows, totals: sumRows(rows, src), unattributed });
+  return json({ currency, tracking, business_type: type, level, attribution: "account default", rows, totals: sumRows(rows, src), unattributed });
 }

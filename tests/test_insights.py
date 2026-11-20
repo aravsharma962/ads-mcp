@@ -46,6 +46,17 @@ def test_missing_actions_are_zero():
     assert r["purchase_value"] == 0.0 and r["roas"] == 0.0
 
 
+def test_leads_use_lead_action_and_never_double_count_grouped():
+    both = [{"action_type": "lead", "value": "12"}, {"action_type": "onsite_conversion.lead_grouped", "value": "12"}]
+    assert parse_insights_row({**RAW, "actions": both}, "campaign")["leads"] == 12      # superset, not 24
+    grouped_only = [{"action_type": "onsite_conversion.lead_grouped", "value": "7"}]
+    assert parse_insights_row({**RAW, "actions": grouped_only}, "campaign")["leads"] == 7
+    only_lead = [{"action_type": "lead", "value": "3"}]
+    assert parse_insights_row({**RAW, "actions": only_lead}, "campaign")["leads"] == 3
+    assert parse_insights_row(RAW, "campaign")["leads"] == 0                             # no lead actions
+    assert parse_insights_row({}, "ad")["leads"] == 0
+
+
 def test_level_selects_ids_and_names():
     ad = parse_insights_row(RAW, "ad")
     assert (ad["id"], ad["name"], ad["ad_id"], ad["adset_id"], ad["campaign_id"]) == ("a1", "Ad", "a1", "s1", "c1")

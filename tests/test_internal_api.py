@@ -136,6 +136,21 @@ def test_tool_schemas_match_web_contract():
     assert VALID_LEVELS == {"campaign", "adset", "ad"}    # web LEVELS in lib/performance.ts
 
 
+def test_row_fields_match_web_contract():
+    """web/src/lib/performance.ts normalizeRow reads exactly these fields from hub rows (business types included)."""
+    from ads_api import parse_insights_row
+    from performance import merge_performance
+    meta = parse_insights_row({"ad_id": "1", "ad_name": "x"}, "ad")
+    assert {"id", "name", "campaign_id", "adset_id", "ad_id", "thumbnail_url", "spend", "impressions", "link_clicks",
+            "landing_page_views", "add_to_cart", "purchases", "purchase_value", "leads"} <= set(meta), set(meta)
+    out = merge_performance([meta], {"level": "ad", "events": []}, ["purchase"])
+    tracked = {"sessions", "add_to_cart_sessions", "conversion_sessions", "tracked_value", "signup_sessions",
+               "trial_sessions", "demo_sessions", "lead_sessions", "paid_events"}
+    assert tracked <= set(out["rows"][0]), set(out["rows"][0])
+    assert {"sessions", "add_to_cart_sessions", "conversion_sessions", "signup_sessions", "trial_sessions",
+            "demo_sessions", "lead_sessions", "paid_events"} <= set(out["unattributed"])
+
+
 def test_tools_call_unknown_tool_404():
     r = req(c, "POST", "/internal/tools/call", headers=H(A), json={"name": "nope", "arguments": {}})
     assert r.status_code == 404

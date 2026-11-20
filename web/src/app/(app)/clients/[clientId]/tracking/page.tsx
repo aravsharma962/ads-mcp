@@ -16,5 +16,5 @@ export default async function TrackingPage({ params }: { params: Promise<{ clien
   const { data: site } = await db.from("sites").select("site_key, allowed_origins").eq("client_id", client.id).maybeSingle();
   const health = site ? await trackingHealth(db, client.id) : null;
   const appUrl = process.env.APP_URL ?? "";
-  return <TrackingSetup clientId={client.id} appUrl={appUrl} initialSite={site} initialHealth={health} canEdit={ctx.role === "owner"} />;
+  return <TrackingSetup clientId={client.id} appUrl={appUrl} initialSite={site} initialHealth={health} canEdit={ctx.role === "owner"} businessType={client.business_type} />;
 }

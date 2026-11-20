@@ -8,7 +8,8 @@ from ads_api import MetaError, VALID_LEVELS, _check_date, _ratio, get_meta_insig
 from tenancy import norm_account
 
 SUM_FIELDS = ("spend", "impressions", "link_clicks", "landing_page_views", "add_to_cart", "purchases",
-              "purchase_value")
+              "purchase_value", "leads")
+LEAD_EVENTS = {"lead", "form_submit"}      # tracked lead = unique sessions with either event
 DENIED = {"error": "You do not have access to this client."}      # exist kare ya na kare, same jawab
 LEVEL_KEY = {"campaign": "campaign_id", "adset": "adset_id", "ad": "ad_id"}
 
@@ -34,7 +35,13 @@ def sum_rows(row_lists: list[list[dict]]) -> list[dict]:
 
 
 def _bucket() -> dict:
-    return {"sessions": set(), "atc": set(), "conv": set(), "value": 0.0}
+    return {"sessions": set(), "atc": set(), "conv": set(), "value": 0.0,
+            "signup": set(), "trial": set(), "demo": set(), "lead": set(), "paid": 0}
+
+
+def _counts(b: dict) -> dict:
+    return {"signup_sessions": len(b["signup"]), "trial_sessions": len(b["trial"]),
+            "demo_sessions": len(b["demo"]), "lead_sessions": len(b["lead"]), "paid_events": b["paid"]}
 
 
 def _num(v) -> float:
@@ -48,6 +55,9 @@ def merge_performance(meta_rows: list[dict], events: dict, conversion_events: li
                       roas_source: str = "tracking") -> dict:
     """events = {"level": "ad|adset|campaign", "events": [{session_id, name, campaign_id, adset_id, ad_id, value}]}.
 
+    Business-type counts: signup_sessions / trial_sessions / demo_sessions = unique sessions with a signup /
+    trial_start / demo_booked event; lead_sessions = unique sessions with a lead or form_submit event;
+    paid_events = number of paid events.
     sessions = unique sessions with any event; add_to_cart_sessions / conversion_sessions = unique sessions
     with an add_to_cart / conversion event. Events jinki id us level par nahi hai ya kisi Meta row se nahi
     milti, 'unattributed' mein jaate hain. tracked_value = 'purchase' events ki value ka sum.
@@ -71,6 +81,16 @@ def merge_performance(meta_rows: list[dict], events: dict, conversion_events: li
             b["conv"].add(sid)
         if name == "purchase":
             b["value"] += _num(e.get("value"))
+        if name == "signup":
+            b["signup"].add(sid)
+        elif name == "trial_start":
+            b["trial"].add(sid)
+        elif name == "demo_booked":
+            b["demo"].add(sid)
+        elif name == "paid":
+            b["paid"] += 1                  # paid counts events (each payment), not unique sessions
+        if name in LEAD_EVENTS:
+            b["lead"].add(sid)
     rows = []
     for r in meta_rows:
         b = buckets.get(r["id"]) or _bucket()
@@ -82,6 +102,7 @@ def merge_performance(meta_rows: list[dict], events: dict, conversion_events: li
             "add_to_cart_sessions": len(b["atc"]),
             "conversion_sessions": len(b["conv"]),
             "tracked_value": b["value"],
+            **_counts(b),
             "visit_rate": _ratio(len(b["sessions"]), clicks, 100),
             "add_to_cart_rate": _ratio(len(b["atc"]), clicks, 100),
             "conversion_rate": _ratio(len(b["conv"]), clicks, 100),
@@ -91,7 +112,8 @@ def merge_performance(meta_rows: list[dict], events: dict, conversion_events: li
     return {"rows": rows,
             "unattributed": {"sessions": len(unattributed["sessions"]),
                              "add_to_cart_sessions": len(unattributed["atc"]),
-                             "conversion_sessions": len(unattributed["conv"])}}
+                             "conversion_sessions": len(unattributed["conv"]),
+                             **_counts(unattributed)}}
 
 
 def performance_for_client(store, tenant_id: str, client_id: str, date_from: str, date_to: str,

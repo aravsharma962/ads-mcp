@@ -114,6 +114,16 @@ def _action(items, action_type: str) -> float:
     return 0.0
 
 
+def _leads(actions) -> int:
+    """Meta lead count. `lead` is the superset (website pixel + on-Facebook instant forms); instant forms are also
+    reported as `onsite_conversion.lead_grouped`, so adding the two would double count. Use `lead` when Meta
+    reports it, else `onsite_conversion.lead_grouped`."""
+    items = actions or []
+    if any(it.get("action_type") == "lead" for it in items):
+        return int(_action(items, "lead"))
+    return int(_action(items, "onsite_conversion.lead_grouped"))
+
+
 def _ratio(num: float, den: float, scale: float = 1.0):
     """Denominator 0 ho to None (kabhi NaN/Infinity nahi)."""
     if not den or not math.isfinite(num) or not math.isfinite(den):
@@ -143,6 +153,7 @@ def parse_insights_row(raw: dict, level: str) -> dict:
         "add_to_cart": int(_action(raw.get("actions"), "add_to_cart")),
         "purchases": int(_action(raw.get("actions"), "purchase")),
         "purchase_value": value,
+        "leads": _leads(raw.get("actions")),
         "ctr": _ratio(clicks, impressions, 100),
         "cpc": _ratio(spend, clicks),
         "cpm": _ratio(spend, impressions, 1000),

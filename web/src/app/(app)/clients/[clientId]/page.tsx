@@ -11,5 +11,5 @@ export default async function DashboardPage({ params }: { params: Promise<{ clie
   const ctx = await requireTenantContext(db);
   const client = await getOwnedClient(db, ctx.tenantId, clientId);
   if (!client) notFound();
-  return <Dashboard clientId={client.id} targets={await loadTargets(db, client.id)} />;
+  return <Dashboard clientId={client.id} businessType={client.business_type} targets={await loadTargets(db, client.id, client.business_type)} />;
 }

@@ -22,7 +22,12 @@ vi.mock("@/lib/hub", () => {
 import { POST as createClient, GET as listClients } from "./clients/route";
 import { GET as getAccounts, POST as postAccount, DELETE as deleteAccount } from "./clients/[clientId]/accounts/route";
 import { GET as getTargets, PUT as putTargets } from "./clients/[clientId]/targets/route";
-import { DEFAULT_TARGETS, METRIC_KEYS } from "@/lib/metrics";
+import { DEFAULT_TARGETS, metricsForType } from "@/lib/metrics";
+import { PATCH as patchClient } from "./clients/[clientId]/route";
+import { POST as postSite } from "./clients/[clientId]/site/route";
+import { GET as getPerf } from "./clients/[clientId]/performance/route";
+
+const METRIC_KEYS = metricsForType("ecommerce");
 
 let db: FakeDb;
 beforeEach(() => {
@@ -36,7 +41,7 @@ beforeEach(() => {
 });
 
 describe("POST /api/clients", () => {
-  const body = { name: "New Client", currency: "inr", timezone: "Asia/Kolkata" };
+  const body = { name: "New Client", currency: "inr", timezone: "Asia/Kolkata", business_type: "ecommerce" };
   it("member gets 403", async () => {
     state.user = UA_MEMBER;
     const res = await createClient(req("/api/clients", { method: "POST", body }));
@@ -236,5 +241,176 @@ describe("targets", () => {
     await putTargets(req("/x", { method: "PUT", body: { reset: true } }), p);
     const row = db.rows("targets").find((t) => t.client_id === CA && t.metric === "roas")!;
     expect([row.min_value, row.max_value]).toEqual([9, 12]);
+  });
+});
+
+const setType = (id: string, t: string) => { db.rows("clients").find((c) => c.id === id)!.business_type = t; };
+
+describe("business type on create", () => {
+  const mk = (b: Record<string, unknown>) => createClient(req("/api/clients", { method: "POST", body: { name: "N", currency: "INR", timezone: "Asia/Kolkata", ...b } }));
+  it("requires a valid business type", async () => {
+    for (const bt of [undefined, "", "retail", 5, null]) expect((await mk({ business_type: bt })).status, String(bt)).toBe(400);
+    expect(db.rows("clients")).toHaveLength(2);
+  });
+  it.each([["lead_gen"], ["saas_b2b"], ["ecommerce"]] as const)("%s: stored and the type's targets seeded", async (bt) => {
+    const res = await mk({ business_type: bt });
+    expect(res.status).toBe(201);
+    const { client } = await res.json();
+    expect(client.business_type).toBe(bt);
+    expect(db.rows("clients").find((c) => c.id === client.id)!.business_type).toBe(bt);
+    const t = db.rows("targets").filter((r) => r.client_id === client.id);
+    expect(t.map((r) => r.metric).sort()).toEqual([...metricsForType(bt)].sort());
+    for (const r of t.filter((x) => !["ctr", "cpc", "cpm", "visit_rate", "add_to_cart_rate", "conversion_rate", "roas"].includes(x.metric))) {
+      expect([r.min_value, r.max_value]).toEqual([null, null]);
+    }
+  });
+  it("list includes the type", async () => {
+    setType(CA, "lead_gen");
+    const { clients } = await (await listClients()).json();
+    expect(clients[0].business_type).toBe("lead_gen");
+  });
+});
+
+describe("targets by business type", () => {
+  const p = params({ clientId: CA });
+  it("GET returns only the type's metrics, new ones empty", async () => {
+    setType(CA, "saas_b2b");
+    const { targets } = await (await getTargets(req("/x"), p)).json();
+    expect(Object.keys(targets).sort()).toEqual([...metricsForType("saas_b2b")].sort());
+    for (const k of ["cpl", "signup_rate", "demo_rate", "cost_per_trial", "cac"]) expect(targets[k]).toEqual({ min: null, max: null });
+    expect(targets.ctr).toEqual({ min: 3, max: null });
+    expect(targets.roas).toBeUndefined();
+  });
+  it("a client without a stored type behaves as ecommerce", async () => {
+    const { targets } = await (await getTargets(req("/x"), p)).json();
+    expect(Object.keys(targets).sort()).toEqual([...METRIC_KEYS].sort());
+  });
+  it("PUT saves new-type metrics and rejects metrics of another type", async () => {
+    setType(CA, "lead_gen");
+    const ok = await putTargets(req("/x", { method: "PUT", body: { targets: { cpl: { min: null, max: 400 }, lead_rate: { min: 5, max: null } } } }), p);
+    expect(ok.status).toBe(200);
+    const saved = (await ok.json()).targets;
+    expect(saved.cpl).toEqual({ min: null, max: 400 });
+    expect(saved.roas).toBeUndefined();
+    const bad = await putTargets(req("/x", { method: "PUT", body: { targets: { roas: { min: 1, max: 2 } } } }), p);
+    expect(bad.status).toBe(400);
+    expect(db.rows("targets").some((t) => t.client_id === CA && t.metric === "roas")).toBe(false);
+    expect((await putTargets(req("/x", { method: "PUT", body: { targets: { cac: { min: null, max: 5 } } } }), p)).status).toBe(400);
+  });
+  it("reset only touches the type's metrics and leaves new ones empty", async () => {
+    setType(CA, "saas_b2b");
+    await putTargets(req("/x", { method: "PUT", body: { targets: { cac: { min: null, max: 5 }, ctr: { min: 9, max: null } } } }), p);
+    const res = await putTargets(req("/x", { method: "PUT", body: { reset: true } }), p);
+    const { targets } = await res.json();
+    expect(targets.cac).toEqual({ min: null, max: null });
+    expect(targets.ctr).toEqual({ min: 3, max: null });
+    expect(db.rows("targets").some((t) => t.client_id === CA && t.metric === "roas" && t.min_value !== 9)).toBe(false);
+  });
+});
+
+describe("PATCH /api/clients/[id] (change business type)", () => {
+  const p = params({ clientId: CA });
+  const patch = (b: unknown, id = CA) => patchClient(req(`/api/clients/${id}`, { method: "PATCH", body: b }), params({ clientId: id }));
+  it("owner switches type; missing target rows are created empty, existing rows are kept", async () => {
+    db.rows("targets").find((t) => t.client_id === CA && t.metric === "ctr")!.min_value = 4;
+    const res = await patch({ business_type: "saas_b2b" });
+    expect(res.status).toBe(200);
+    expect((await res.json()).client.business_type).toBe("saas_b2b");
+    expect(db.rows("clients").find((c) => c.id === CA)!.business_type).toBe("saas_b2b");
+    const rows = db.rows("targets").filter((t) => t.client_id === CA);
+    expect(rows.map((r) => r.metric).sort()).toEqual(expect.arrayContaining([...metricsForType("saas_b2b")]));
+    expect(rows.find((r) => r.metric === "ctr")!.min_value).toBe(4);
+    expect(rows.find((r) => r.metric === "cac")).toMatchObject({ min_value: null, max_value: null });
+    const { targets } = await (await getTargets(req("/x"), p)).json();
+    expect(Object.keys(targets).sort()).toEqual([...metricsForType("saas_b2b")].sort());
+  });
+  it("switching back restores the e-commerce view without losing its targets", async () => {
+    await patch({ business_type: "lead_gen" });
+    await patch({ business_type: "ecommerce" });
+    const { targets } = await (await getTargets(req("/x"), p)).json();
+    expect(Object.keys(targets).sort()).toEqual([...METRIC_KEYS].sort());
+    expect(targets.ctr).toEqual({ min: 3, max: null });
+  });
+  it("member gets 403, signed out 401, invalid type or extra keys 400", async () => {
+    state.user = UA_MEMBER;
+    expect((await patch({ business_type: "lead_gen" })).status).toBe(403);
+    state.user = null;
+    expect((await patch({ business_type: "lead_gen" })).status).toBe(401);
+    state.user = UA_OWNER;
+    for (const b of [{}, { business_type: "retail" }, { business_type: "lead_gen", name: "x" }, { business_type: "lead_gen", tenant_id: CB }, "x"]) {
+      expect((await patch(b)).status, JSON.stringify(b)).toBe(400);
+    }
+    expect(db.rows("clients").find((c) => c.id === CA)!.business_type).toBeUndefined();
+  });
+  it("agency B's client is 404 for agency A and stays untouched", async () => {
+    const res = await patch({ business_type: "lead_gen" }, CB);
+    expect(res.status).toBe(404);
+    expect(db.rows("clients").find((c) => c.id === CB)!.business_type).toBeUndefined();
+    expect(db.rows("targets").filter((t) => t.client_id === CB)).toHaveLength(1);
+  });
+  it("an existing site's conversion events follow the new type", async () => {
+    db.rows("sites").push({ id: "s1", client_id: CA, site_key: "k", allowed_origins: [], conversion_events: ["purchase", "form_submit"] });
+    await patch({ business_type: "lead_gen" });
+    expect(db.rows("sites")[0].conversion_events).toEqual(["lead", "form_submit"]);
+    await patch({ business_type: "saas_b2b" });
+    expect(db.rows("sites")[0].conversion_events).toEqual(["signup", "demo_booked", "paid"]);
+    await patch({ business_type: "ecommerce" });
+    expect(db.rows("sites")[0].conversion_events).toEqual(["purchase", "form_submit"]);
+  });
+});
+
+describe("site creation by business type", () => {
+  it.each([["lead_gen", ["lead", "form_submit"]], ["saas_b2b", ["signup", "demo_booked", "paid"]], ["ecommerce", ["purchase", "form_submit"]]] as const)(
+    "%s gets sensible conversion events", async (bt, expected) => {
+      setType(CA, bt);
+      const res = await postSite(req("/x", { method: "POST", body: { allowed_origins: ["https://a.example"] } }), params({ clientId: CA }));
+      expect(res.status).toBe(201);
+      expect(db.rows("sites")[0].conversion_events).toEqual(expected);
+    });
+});
+
+describe("performance route by business type", () => {
+  const perfRow = { id: "c1", name: "Camp", spend: 100, impressions: 10000, link_clicks: 200, landing_page_views: 100, add_to_cart: 0, purchases: 0, purchase_value: 0, leads: 8 };
+  const get = (id = CA) => getPerf(req(`/api/clients/${id}/performance?from=2026-11-01&to=2026-11-07&level=campaign`), params({ clientId: id }));
+  it("lead_gen returns lead rows with cpl and lead_rate and no ecommerce rates", async () => {
+    setType(CA, "lead_gen");
+    hub.callTool.mockResolvedValue({ currency: "INR", rows: [perfRow] });
+    const body = await (await get()).json();
+    expect(body.business_type).toBe("lead_gen");
+    expect(Object.keys(body.rows[0].rates).sort()).toEqual(["cpc", "cpl", "cpm", "ctr", "lead_rate"]);
+    expect(body.rows[0].rates.cpl).toBeCloseTo(12.5);
+    expect(Object.keys(body.totals.rates).sort()).toEqual(["cpc", "cpl", "cpm", "ctr", "lead_rate"]);
+    expect(body.totals.rates.lead_rate).toBeCloseTo(4);
+  });
+  it("saas_b2b with a site uses ads_performance and tracked event counts", async () => {
+    setType(CA, "saas_b2b");
+    db.rows("sites").push({ id: "s1", client_id: CA, site_key: "k" });
+    hub.callTool.mockResolvedValue({
+      currency: "INR",
+      rows: [{ ...perfRow, signup_sessions: 10, trial_sessions: 5, demo_sessions: 4, lead_sessions: 0, paid_events: 2 }],
+      unattributed: { sessions: 1, signup_sessions: 1 },
+    });
+    const body = await (await get()).json();
+    expect(hub.callTool.mock.calls[0][1]).toBe("ads_performance");
+    expect(body.business_type).toBe("saas_b2b");
+    expect(body.totals.rates.cac).toBeCloseTo(50);
+    expect(body.totals.rates.cost_per_trial).toBeCloseTo(20);
+    expect(body.rows[0].rates.demo_rate).toBeCloseTo(2);
+    expect(body.unattributed.signup_sessions).toBe(1);
+  });
+  it("saas_b2b without a site: demo_rate, cost_per_trial and cac are null", async () => {
+    setType(CA, "saas_b2b");
+    hub.callTool.mockResolvedValue({ currency: "INR", rows: [perfRow] });
+    const body = await (await get()).json();
+    expect(body.rows[0].rates.demo_rate).toBeNull();
+    expect(body.rows[0].rates.cac).toBeNull();
+    expect(body.rows[0].rates.cpl).toBeCloseTo(12.5);
+  });
+  it("an ecommerce client is unchanged and agency B's client is still 404", async () => {
+    hub.callTool.mockResolvedValue({ currency: "INR", rows: [{ ...perfRow, purchase_value: 500 }] });
+    const body = await (await get()).json();
+    expect(body.business_type).toBe("ecommerce");
+    expect(Object.keys(body.rows[0].rates).sort()).toEqual([...METRIC_KEYS].sort());
+    expect((await get(CB)).status).toBe(404);
   });
 });

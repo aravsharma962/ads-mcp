@@ -1,7 +1,15 @@
 import { randomBytes } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { BusinessType } from "@/lib/metrics";
 
 export type TrackingHealth = { eventsLast24h: number; sessionsMissingAdIds: number; lastEventAt: string | null };
+
+/** Events that count as a "conversion" per business type (stored in sites.conversion_events). */
+export const CONVERSION_EVENTS: Record<BusinessType, string[]> = {
+  ecommerce: ["purchase", "form_submit"],
+  lead_gen: ["lead", "form_submit"],
+  saas_b2b: ["signup", "demo_booked", "paid"],
+};
 
 export const newSiteKey = () => "sk_" + randomBytes(18).toString("base64url");
 

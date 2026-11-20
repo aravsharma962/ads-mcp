@@ -13,6 +13,7 @@ The browser only ever talks to B. B talks to A server-to-server with a shared se
 
 1. Supabase -> SQL Editor. If not done already, run `supabase/migrations/001_init.sql`.
 2. Paste and run `supabase/migrations/002_saas.sql`. Success: the tables `memberships`, `clients`, `client_accounts`, `targets`, `conversations`, `messages`, `usage_events`, `insights_cache`, `sites`, `events` appear in Table Editor, each with RLS on.
+2b. Run `supabase/migrations/003_saas_hardening.sql` (if not done), then `supabase/migrations/004_business_types.sql` **before** deploying the web app that has business types: it adds `clients.business_type` (existing clients become `ecommerce`). Success: `select business_type from clients` works.
 3. Supabase -> Authentication -> Providers -> Email: turn **Allow new users to sign up** off (the platform is invite-only).
 4. Supabase -> Authentication -> URL Configuration: set Site URL to the web app URL (`APP_URL`).
 

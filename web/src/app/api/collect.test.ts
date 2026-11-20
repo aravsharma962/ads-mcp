@@ -121,6 +121,26 @@ describe("collector abuse limits", () => {
     expect(JSON.stringify(db.rows("events"))).not.toContain("198.51.100");
   });
 
+  it("accepts the business-type events and stores them under the site's client", async () => {
+    for (const event of ["signup", "trial_start", "demo_booked", "lead"]) {
+      expect((await post(body({ event }))).status, event).toBe(204);
+    }
+    expect((await post(body({ event: "paid", value: 4999, currency: "INR" }))).status).toBe(204);
+    expect(db.rows("events").map((e) => e.name)).toEqual(["signup", "trial_start", "demo_booked", "lead", "paid"]);
+    expect(db.rows("events").at(-1)).toMatchObject({ value: 4999, currency: "INR" });
+    for (const event of ["page_view", "add_to_cart", "form_submit", "purchase"]) expect((await post(body({ event }))).status, event).toBe(204);
+  });
+
+  it("new events still reject personal-data fields, unknown names and implausible paid values", async () => {
+    for (const k of ["email", "phone", "name", "mobile"]) {
+      expect((await post(body({ event: "signup", [k]: "x" }))).status, k).toBe(400);
+    }
+    expect((await post(body({ event: "signup", props: { email: "a@b.c" } }))).status).toBe(400);   // strict schema
+    expect((await post(body({ event: "signup_complete" }))).status).toBe(400);
+    expect((await post(body({ event: "paid", value: 5e8, currency: "INR" }))).status).toBe(400);
+    expect(db.rows("events")).toHaveLength(0);
+  });
+
   it("implausible purchase value is rejected and not stored; plausible one is kept", async () => {
     expect((await post(body({ event: "purchase", value: 5e8, currency: "INR" }))).status).toBe(400);
     expect(db.rows("events")).toHaveLength(0);

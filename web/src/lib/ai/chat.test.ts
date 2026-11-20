@@ -158,6 +158,32 @@ describe("runChat", () => {
     expect(calls[0].system).toContain("Client A");
   });
 
+  it("system prompt is driven by the client's business type", async () => {
+    const prompt = async (type?: string) => {
+      db.rows("clients").find((c) => c.id === CA)!.business_type = type;
+      const { provider, calls } = scripted([text("hi")]);
+      await collect({ provider, conversationId: CONV });
+      return calls[0].system as string;
+    };
+    const lead = await prompt("lead_gen");
+    expect(lead).toMatch(/Business type: Lead Generation/);
+    expect(lead).toContain("Cost per lead (CPL)");
+    expect(lead).toContain("Lead rate (%)");
+    expect(lead).not.toMatch(/ROAS|Add-to-cart/);
+    expect(lead).toMatch(/cost per lead and lead volume/i);
+    expect(lead).toMatch(/Cost per lead \(CPL\) \(cpl\): min none, max none/);       // empty target is stated, not invented
+    const saas = await prompt("saas_b2b");
+    expect(saas).toMatch(/Business type: SaaS \/ B2B Leads/);
+    for (const l of ["Cost per signup (CPL)", "Signup rate (%)", "Demo rate (%)", "Cost per trial", "CAC"]) expect(saas).toContain(l);
+    expect(saas).toMatch(/CAC/);
+    expect(saas).not.toMatch(/ROAS/);
+    expect(saas).toMatch(/lower is better.*(CAC|Cost per)/is);
+    const eco = await prompt(undefined);
+    expect(eco).toMatch(/Business type: E-commerce/);
+    expect(eco).toContain("ROAS (x)");
+    expect(eco).not.toMatch(/Cost per lead|CAC/);
+  });
+
   it("refuses a conversation that belongs to another tenant or client", async () => {
     const { provider, calls } = scripted([text("never")]);
     const ev = await collect({ provider, tenantId: TB, clientId: CB });

@@ -14,9 +14,10 @@ export function formatMoney(n: number | null, currency: string): string {
 }
 
 /** Null or non-finite values always read "no data", never NaN or Infinity. */
-export function formatMetric(m: MetricKey, v: number | null, currency: string): string {
-  if (v === null || !Number.isFinite(v)) return "no data";
-  if (m === "cpc" || m === "cpm") return formatMoney(v, currency);
+const MONEY_METRICS: MetricKey[] = ["cpc", "cpm", "cpl", "cost_per_trial", "cac"];
+export function formatMetric(m: MetricKey, v: number | null | undefined, currency: string): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return "no data";
+  if (MONEY_METRICS.includes(m)) return formatMoney(v, currency);
   if (m === "roas") return `${v.toFixed(2)}x`;
   return `${v.toFixed(2)}%`;
 }

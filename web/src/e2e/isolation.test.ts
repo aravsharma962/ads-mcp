@@ -29,6 +29,7 @@ import { GET as getPerf } from "@/app/api/clients/[clientId]/performance/route";
 import { POST as postChat } from "@/app/api/clients/[clientId]/chat/route";
 import { GET as getConvs, POST as postConv } from "@/app/api/clients/[clientId]/conversations/route";
 import { GET as getSite, POST as postSite, PUT as putSite } from "@/app/api/clients/[clientId]/site/route";
+import { PATCH as patchClient } from "@/app/api/clients/[clientId]/route";
 import { POST as postInvite } from "@/app/api/team/invite/route";
 
 const CONV_A = "c0000000-0000-4000-8000-0000000000a1";
@@ -58,6 +59,7 @@ const routes = (id: string): Call[] => [
   ["GET accounts", () => getAccounts(req(`/api/clients/${id}/accounts`), p(id))],
   ["POST accounts", () => postAccount(req(`/api/clients/${id}/accounts`, body({ account: "act_999", token: "tok" })), p(id))],
   ["DELETE accounts", () => deleteAccount(req(`/api/clients/${id}/accounts?external_id=act_111`, { method: "DELETE" }), p(id))],
+  ["PATCH client type", () => patchClient(req(`/api/clients/${id}`, body({ business_type: "lead_gen" }, "PATCH")), p(id))],
   ["GET targets", () => getTargets(req(`/api/clients/${id}/targets`), p(id))],
   ["PUT targets", () => putTargets(req(`/api/clients/${id}/targets`, body({ targets: { ctr: { min: 1, max: null } } }, "PUT")), p(id))],
   ["GET performance", () => getPerf(req(`/api/clients/${id}/performance?from=2026-11-01&to=2026-11-07&level=ad`), p(id))],
@@ -90,6 +92,8 @@ describe("cross-tenant isolation: agency B using agency A's ids", () => {
     expect(db.rows("sites")).toEqual([{ id: "s1", client_id: CA, site_key: "SECRET_SITE_KEY_A", allowed_origins: ["https://a-shop.example"] }]);
     expect(db.rows("client_accounts").filter((r) => r.client_id === CA)).toHaveLength(1);
     expect(db.rows("targets").find((t) => t.client_id === CA)).toMatchObject({ min_value: 3 });
+    expect(db.rows("targets").filter((t) => t.client_id === CA)).toHaveLength(1);        // no rows created by a type switch
+    expect(db.rows("clients").find((c) => c.id === CA)!.business_type).toBeUndefined();
   });
 
   it("lists, creates and invites stay inside agency B", async () => {
@@ -97,7 +101,7 @@ describe("cross-tenant isolation: agency B using agency A's ids", () => {
     expect(list).toContain("Client B");
     for (const s of SECRETS) expect(list).not.toContain(s);
 
-    const created = await createClient(req("/api/clients", body({ name: "B2", currency: "INR", timezone: "Asia/Kolkata", tenant_id: TA })));
+    const created = await createClient(req("/api/clients", body({ name: "B2", currency: "INR", timezone: "Asia/Kolkata", business_type: "lead_gen", tenant_id: TA })));
     expect(created.status).toBe(201);
     expect(db.rows("clients").find((c) => c.name === "B2")!.tenant_id).toBe(TB);
 

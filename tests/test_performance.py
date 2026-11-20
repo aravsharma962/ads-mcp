@@ -10,7 +10,7 @@ os.environ["STORE"] = "memory"
 from cryptography.fernet import Fernet
 os.environ["TOKEN_ENC_KEY"] = Fernet.generate_key().decode()
 
-from performance import merge_performance  # noqa: E402
+from performance import merge_performance, sum_rows  # noqa: E402
 
 CONV = ["purchase", "form_submit"]
 
@@ -76,7 +76,9 @@ def test_unattributed_bucket():
                ev("s3", "form_submit", ad=None, adset=None, campaign=None),
                ev("s3", "page_view", ad="UNKNOWN_AD"))
     out = merge_performance([meta_row()], e, CONV)
-    assert out["unattributed"] == {"sessions": 2, "add_to_cart_sessions": 1, "conversion_sessions": 1}, out["unattributed"]
+    assert out["unattributed"] == {"sessions": 2, "add_to_cart_sessions": 1, "conversion_sessions": 1,
+                                   "signup_sessions": 0, "trial_sessions": 0, "demo_sessions": 0,
+                                   "lead_sessions": 1, "paid_events": 0}, out["unattributed"]   # form_submit is a lead
     assert one(out)["sessions"] == 1           # sirf apne ad ke events
     # level adset: adset_id se match
     row = {**meta_row(ad="s1"), "id": "s1", "ad_id": None}
@@ -96,6 +98,48 @@ def test_roas_source_meta_uses_meta_roas():
     assert r["roas_effective"] == 7.0 and r["tracked_roas"] == 9.0 and r["roas"] == 7.0
     r = one(merge_performance([meta_row(spend=100.0, roas=7.0)], e, CONV, roas_source="tracking"))
     assert r["roas_effective"] == 9.0
+
+
+def test_business_type_event_counts():
+    e = events(ev("s1", "signup"), ev("s1", "signup"), ev("s2", "signup"), ev("s2", "trial_start"),
+               ev("s3", "demo_booked"), ev("s3", "demo_booked"), ev("s4", "lead"), ev("s5", "form_submit"),
+               ev("s4", "form_submit"), ev("s6", "paid", value=50.0), ev("s6", "paid", value=50.0), ev("s7", "paid"))
+    r = one(merge_performance([meta_row()], e, CONV))
+    assert r["signup_sessions"] == 2 and r["trial_sessions"] == 1 and r["demo_sessions"] == 1
+    assert r["lead_sessions"] == 2            # s4 (lead + form_submit) counted once, plus s5
+    assert r["paid_events"] == 3              # paid counts events, not sessions
+    assert r["sessions"] == 7
+
+
+def test_event_counts_default_to_zero_and_are_attributed_per_ad():
+    r = one(merge_performance([meta_row()], events(ev("s1", "page_view")), CONV))
+    for k in ("signup_sessions", "trial_sessions", "demo_sessions", "lead_sessions", "paid_events"):
+        assert r[k] == 0, k
+    e = events(ev("s1", "signup", ad="OTHER"), ev("s2", "signup", ad="X"))
+    out = merge_performance([meta_row("X"), meta_row("OTHER")], e, CONV)
+    assert one(out, "X")["signup_sessions"] == 1 and one(out, "OTHER")["signup_sessions"] == 1
+
+
+def test_unattributed_has_event_counts():
+    e = events(ev("a", "signup", ad=None, adset=None, campaign=None), ev("a", "trial_start", ad=None, adset=None, campaign=None),
+               ev("b", "demo_booked", ad="UNKNOWN"), ev("c", "lead", ad=None), ev("d", "paid", ad=None), ev("e", "paid", ad=None),
+               ev("f", "signup", ad="X"))
+    out = merge_performance([meta_row()], e, CONV)
+    u = out["unattributed"]
+    assert (u["signup_sessions"], u["trial_sessions"], u["demo_sessions"], u["lead_sessions"], u["paid_events"]) == (1, 1, 1, 1, 2), u
+    assert u["sessions"] == 5 and one(out)["signup_sessions"] == 1
+
+
+def test_sum_rows_adds_leads_across_accounts():
+    a = [{**meta_row("X"), "leads": 4}]
+    b = [{**meta_row("X"), "leads": 6}]
+    merged = sum_rows([a, b])
+    assert len(merged) == 1 and merged[0]["leads"] == 10
+
+
+def test_leads_present_when_a_meta_row_lacks_the_field():
+    merged = sum_rows([[meta_row("X")], [{**meta_row("X"), "leads": 2}]])
+    assert merged[0]["leads"] == 2
 
 
 # ---- tool level ----
@@ -170,7 +214,10 @@ def test_tool_sums_accounts_and_recomputes_rates():
     assert r["ctr"] == 0.8 and r["cpc"] == 1.25 and r["cpm"] == 10.0 and r["roas"] == 2.0   # sums se recompute
     assert r["sessions"] == 1 and r["conversion_sessions"] == 1 and r["tracked_value"] == 250.0
     assert r["visit_rate"] == 1.25 and r["tracked_roas"] == 2.5
-    assert out["unattributed"] == {"sessions": 1, "add_to_cart_sessions": 0, "conversion_sessions": 0}, out["unattributed"]
+    assert out["unattributed"] == {"sessions": 1, "add_to_cart_sessions": 0, "conversion_sessions": 0,
+                                   "signup_sessions": 0, "trial_sessions": 0, "demo_sessions": 0,
+                                   "lead_sessions": 0, "paid_events": 0}, out["unattributed"]
+    assert r["leads"] == 0 and r["signup_sessions"] == 0 and r["paid_events"] == 0
     assert out["roas_source"] == "tracking"
 
 

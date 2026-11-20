@@ -1,6 +1,6 @@
 import { apiContext, getOwnedClient, json, notFound, readJson } from "@/lib/api";
 import { createServiceClient } from "@/lib/supabase/service";
-import { newSiteKey, normalizeOrigins, trackingHealth } from "@/lib/tracking";
+import { CONVERSION_EVENTS, newSiteKey, normalizeOrigins, trackingHealth } from "@/lib/tracking";
 
 type Ctx = { params: Promise<{ clientId: string }> };
 const COLS = "site_key, allowed_origins, conversion_events";
@@ -28,7 +28,7 @@ export async function POST(request: Request, { params }: Ctx) {
   if (existing) return json({ error: "Tracking is already set up for this client." }, 409);
   // Direct INSERT is revoked for browser sessions (migration 003); the owner and client checks above gate this write.
   const { data, error } = await createServiceClient().from("sites")
-    .insert({ client_id: client.id, site_key: newSiteKey(), allowed_origins: origins })
+    .insert({ client_id: client.id, site_key: newSiteKey(), allowed_origins: origins, conversion_events: CONVERSION_EVENTS[client.business_type] })
     .select(COLS).single();
   if (error || !data) return json({ error: "Could not create the tracking site." }, 500);
   return json({ site: data }, 201);

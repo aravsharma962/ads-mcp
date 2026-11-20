@@ -1,4 +1,7 @@
-import { METRIC_KEYS, METRIC_LABELS, statusFor, type Band, type MetricKey, type Rates } from "@/lib/metrics";
+import {
+  EMPTY_BAND, TRACKING_ONLY_METRICS, hasBand, metricLabel, metricsForType, statusFor,
+  type BusinessType, type Rates, type Targets,
+} from "@/lib/metrics";
 import { STATUS_CLASS } from "./StatusBadge";
 import { formatMetric, formatMoney, formatInt } from "@/lib/format";
 
@@ -12,19 +15,38 @@ export type DisplayRow = {
   add_to_cart: number;
   purchases: number;
   purchase_value: number;
+  leads?: number;
+  signups?: number;
+  trials?: number;
+  demos?: number;
+  paid?: number;
   rates: Rates;
 };
 
-const TRACKING_METRICS: MetricKey[] = ["visit_rate", "add_to_cart_rate", "conversion_rate"];
+type CountKey = "add_to_cart" | "purchases" | "leads" | "signups" | "trials" | "demos" | "paid";
+/** Count columns shown after the Meta basics, per business type. `tracked` ones need the first-party tracker. */
+const COUNT_COLUMNS: Record<BusinessType, { key: CountKey; label: string; tracked?: boolean }[]> = {
+  ecommerce: [{ key: "add_to_cart", label: "Add to cart" }, { key: "purchases", label: "Purchases" }],
+  lead_gen: [{ key: "leads", label: "Leads" }],
+  saas_b2b: [
+    { key: "signups", label: "Signups" },
+    { key: "trials", label: "Trials", tracked: true },
+    { key: "demos", label: "Demos", tracked: true },
+    { key: "paid", label: "Paid", tracked: true },
+  ],
+};
 const LEVEL_LABEL = { campaign: "Campaign", adset: "Ad set", ad: "Ad" } as const;
 
-export default function PerformanceTable({ rows, targets, currency, level, tracking }: {
+export default function PerformanceTable({ rows, targets, currency, level, tracking, businessType = "ecommerce" }: {
   rows: DisplayRow[];
-  targets: Record<MetricKey, Band>;
+  targets: Targets;
   currency: string;
   level: keyof typeof LEVEL_LABEL;
   tracking: boolean;
+  businessType?: BusinessType;
 }) {
+  const metrics = metricsForType(businessType);
+  const counts = COUNT_COLUMNS[businessType];
   if (rows.length === 0) {
     return <p className="rounded bg-white p-6 text-center text-gray-600 shadow">No data for this period</p>;
   }
@@ -37,9 +59,8 @@ export default function PerformanceTable({ rows, targets, currency, level, track
             <th className="p-2">Spend</th>
             <th className="p-2">Impressions</th>
             <th className="p-2">Link clicks</th>
-            <th className="p-2">Add to cart</th>
-            <th className="p-2">Purchases</th>
-            {METRIC_KEYS.map((m) => <th key={m} className="p-2">{METRIC_LABELS[m]}</th>)}
+            {counts.map((c) => <th key={c.key} className="p-2">{c.label}</th>)}
+            {metrics.map((m) => <th key={m} className="p-2">{metricLabel(businessType, m)}</th>)}
           </tr>
         </thead>
         <tbody>
@@ -55,13 +76,16 @@ export default function PerformanceTable({ rows, targets, currency, level, track
               <td className="p-2">{formatMoney(r.spend, currency)}</td>
               <td className="p-2">{formatInt(r.impressions)}</td>
               <td className="p-2">{formatInt(r.link_clicks)}</td>
-              <td className="p-2">{formatInt(r.add_to_cart)}</td>
-              <td className="p-2">{formatInt(r.purchases)}</td>
-              {METRIC_KEYS.map((m) => {
-                const untracked = !tracking && TRACKING_METRICS.includes(m);
-                const status = untracked ? "no_data" : statusFor(m, r.rates[m], targets[m]);
+              {counts.map((c) => (
+                <td key={c.key} className="p-2">{c.tracked && !tracking ? "-" : formatInt(r[c.key] ?? 0)}</td>
+              ))}
+              {metrics.map((m) => {
+                const untracked = !tracking && TRACKING_ONLY_METRICS[businessType].includes(m);
+                const band = targets[m] ?? EMPTY_BAND;
+                const status = untracked ? "no_data" : statusFor(m, r.rates[m], band);
+                const noTarget = !untracked && typeof r.rates[m] === "number" && !hasBand(band);
                 return (
-                  <td key={m} data-metric={m} data-status={status} className={`p-2 ${STATUS_CLASS[status]}`}>
+                  <td key={m} data-metric={m} data-status={status} title={noTarget ? "Set a target" : undefined} className={`p-2 ${STATUS_CLASS[status]}`}>
                     {untracked ? "Tracking not set up" : formatMetric(m, r.rates[m], currency)}
                   </td>
                 );

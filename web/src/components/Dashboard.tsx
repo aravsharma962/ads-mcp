@@ -5,16 +5,19 @@ import DateRange, { presetRange, type Range } from "./DateRange";
 import KpiCard from "./KpiCard";
 import PerformanceTable, { type DisplayRow } from "./PerformanceTable";
 import { formatMetric } from "@/lib/format";
-import { METRIC_DEFINITIONS, METRIC_KEYS, METRIC_LABELS, statusFor, type Band, type MetricKey, type Rates } from "@/lib/metrics";
+import {
+  EMPTY_BAND, TRACKING_ONLY_METRICS, hasBand, metricDefinition, metricLabel, metricsForType, statusFor,
+  type BusinessType, type Rates, type Targets,
+} from "@/lib/metrics";
 
 type Level = "campaign" | "adset" | "ad";
 type Data = {
   currency: string; tracking: boolean; attribution: string;
   rows: DisplayRow[]; totals: { rates: Rates };
-  unattributed: { sessions: number; add_to_cart_sessions: number; conversion_sessions: number } | null;
+  unattributed: { sessions: number } | null;
 };
 
-export default function Dashboard({ clientId, targets }: { clientId: string; targets: Record<MetricKey, Band> }) {
+export default function Dashboard({ clientId, targets, businessType = "ecommerce" }: { clientId: string; targets: Targets; businessType?: BusinessType }) {
   const [range, setRange] = useState<Range>(() => presetRange(7));
   const [level, setLevel] = useState<Level>("campaign");
   const [data, setData] = useState<Data | null>(null);
@@ -51,17 +54,21 @@ export default function Dashboard({ clientId, targets }: { clientId: string; tar
       {data && !loading && (
         <>
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            {METRIC_KEYS.map((m) => {
-              const untracked = !data.tracking && ["visit_rate", "add_to_cart_rate", "conversion_rate"].includes(m);
+            {metricsForType(businessType).map((m) => {
+              const untracked = !data.tracking && TRACKING_ONLY_METRICS[businessType].includes(m);
+              const band = targets[m] ?? EMPTY_BAND;
+              const value = data.totals.rates[m];
+              const noTarget = !untracked && typeof value === "number" && !hasBand(band);
               return (
-                <KpiCard key={m} label={METRIC_LABELS[m]}
-                  value={untracked ? "Tracking not set up" : formatMetric(m, data.totals.rates[m], data.currency)}
-                  status={untracked ? "no_data" : statusFor(m, data.totals.rates[m], targets[m])}
-                  definition={`${METRIC_DEFINITIONS[m]} Attribution window: ${data.attribution}.`} />
+                <KpiCard key={m} label={metricLabel(businessType, m)}
+                  value={untracked ? "Tracking not set up" : formatMetric(m, value, data.currency)}
+                  status={untracked ? "no_data" : statusFor(m, value, band)}
+                  hint={noTarget ? "Set a target" : undefined}
+                  definition={`${metricDefinition(businessType, m)} Attribution window: ${data.attribution}.`} />
               );
             })}
           </div>
-          <PerformanceTable rows={data.rows} targets={targets} currency={data.currency} level={level} tracking={data.tracking} />
+          <PerformanceTable rows={data.rows} targets={targets} currency={data.currency} level={level} tracking={data.tracking} businessType={businessType} />
           {data.unattributed && data.unattributed.sessions > 0 && (
             <p className="text-sm text-gray-600">Unattributed sessions (no ad id in the URL): {data.unattributed.sessions}.</p>
           )}

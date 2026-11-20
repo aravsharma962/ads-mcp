@@ -1,14 +1,32 @@
 "use client";
 
 import { useState } from "react";
+import { BUSINESS_TYPE_LABELS, type BusinessType } from "@/lib/metrics";
 
 type Site = { site_key: string; allowed_origins: string[] };
 type Health = { eventsLast24h: number; sessionsMissingAdIds: number; lastEventAt: string | null };
 
 export const URL_PARAMS = "utm_source=facebook&utm_campaign={{campaign.id}}&utm_term={{adset.id}}&utm_content={{ad.id}}";
 
-export default function TrackingSetup({ clientId, appUrl, initialSite, initialHealth, canEdit }: {
-  clientId: string; appUrl: string; initialSite: Site | null; initialHealth: Health | null; canEdit: boolean;
+/** Events the agency should send from the client's website, per business type. */
+export const EVENT_EXAMPLES: Record<BusinessType, { code: string; note: string }[]> = {
+  ecommerce: [
+    { code: "adsTrack('add_to_cart')", note: "when a visitor adds a product to the cart" },
+    { code: "adsTrack('purchase', {value: 499, currency: 'INR'})", note: "after a completed order" },
+  ],
+  lead_gen: [
+    { code: "adsTrack('lead')", note: "when an enquiry, booking or call-back request is completed" },
+  ],
+  saas_b2b: [
+    { code: "adsTrack('signup')", note: "when a visitor creates an account" },
+    { code: "adsTrack('trial_start')", note: "when a trial begins" },
+    { code: "adsTrack('demo_booked')", note: "when a demo is booked" },
+    { code: "adsTrack('paid', {value: 99, currency: 'USD'})", note: "on each successful payment (CAC counts these events)" },
+  ],
+};
+
+export default function TrackingSetup({ clientId, appUrl, initialSite, initialHealth, canEdit, businessType = "ecommerce" }: {
+  clientId: string; appUrl: string; initialSite: Site | null; initialHealth: Health | null; canEdit: boolean; businessType?: BusinessType;
 }) {
   const [site, setSite] = useState(initialSite);
   const [health] = useState(initialHealth);
@@ -57,12 +75,21 @@ export default function TrackingSetup({ clientId, appUrl, initialSite, initialHe
       <section className="space-y-2 rounded bg-white p-4 shadow">
         <h2 className="font-semibold">1. Add this snippet to every page of the website</h2>
         <pre data-testid="snippet" className="overflow-x-auto rounded bg-gray-100 p-3 text-xs">{snippet}</pre>
-        <p className="text-xs text-gray-500">Form submissions are detected automatically. Call <code>adsTrack(&quot;add_to_cart&quot;)</code> or <code>adsTrack(&quot;purchase&quot;, {"{"}value: 499, currency: &quot;INR&quot;{"}"})</code> for other events. To wait for cookie consent, add <code>data-consent=&quot;manual&quot;</code> and call <code>adsTrack.consent()</code> after the visitor agrees.</p>
+        <p className="text-xs text-gray-500">Form submissions are detected automatically as form_submit events (they also count as leads for lead generation clients). Other events are listed in step 3. To wait for cookie consent, add <code>data-consent=&quot;manual&quot;</code> and call <code>adsTrack.consent()</code> after the visitor agrees.</p>
       </section>
       <section className="space-y-2 rounded bg-white p-4 shadow">
         <h2 className="font-semibold">2. Add these URL parameters to every ad</h2>
         <pre data-testid="url-params" className="overflow-x-auto rounded bg-gray-100 p-3 text-xs">{URL_PARAMS}</pre>
         <p className="text-xs text-gray-500">Paste into the ad&apos;s URL parameters field. Meta fills in the ids. Ads without them show up as &quot;unattributed&quot;.</p>
+      </section>
+      <section className="space-y-2 rounded bg-white p-4 shadow">
+        <h2 className="font-semibold">3. Send these events from the website ({BUSINESS_TYPE_LABELS[businessType]})</h2>
+        <ul data-testid="events" className="space-y-1 text-sm">
+          {EVENT_EXAMPLES[businessType].map((e) => (
+            <li key={e.code}><code className="rounded bg-gray-100 px-1 text-xs">{e.code}</code> {e.note}</li>
+          ))}
+        </ul>
+        <p className="text-xs text-gray-500">Call these from the page or button that confirms the action. Never send names, emails or phone numbers: the collector rejects them. The business type is set on the Targets page.</p>
       </section>
       <section className="space-y-2 rounded bg-white p-4 shadow">
         <h2 className="font-semibold">Tracking health</h2>

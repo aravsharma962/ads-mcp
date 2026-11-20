@@ -25,8 +25,34 @@ class InMemoryStore:
 
     def create_api_key(self, tenant_id: str, label: str = "default") -> str:
         raw = new_api_key()
-        self.keys.append({"tenant_id": tenant_id, "label": label, "key_hash": hash_key(raw), "revoked_at": None})
+        self.keys.append({"id": str(uuid.uuid4()), "tenant_id": tenant_id, "label": label,
+                          "key_hash": hash_key(raw), "created_at": datetime.now(timezone.utc).isoformat(),
+                          "revoked_at": None})
         return raw
+
+    def list_tenants(self) -> list[dict]:
+        return [{"id": t["id"], "name": t["name"], "plan": t["plan"]} for t in reversed(list(self.tenants.values()))]
+
+    def get_tenant(self, tenant_id: str) -> dict | None:
+        t = self.tenants.get(tenant_id)
+        return {"id": t["id"], "name": t["name"], "plan": t["plan"]} if t else None
+
+    def list_keys(self, tenant_id: str) -> list[dict]:
+        return [{"id": k["id"], "label": k["label"], "created_at": k["created_at"], "revoked_at": k["revoked_at"]}
+                for k in self.keys if k["tenant_id"] == tenant_id]
+
+    def revoke_key_by_id(self, tenant_id: str, key_id: str) -> bool:
+        for k in self.keys:
+            if k["id"] == key_id and k["tenant_id"] == tenant_id and not k["revoked_at"]:
+                k["revoked_at"] = datetime.now(timezone.utc).isoformat()
+                return True
+        return False
+
+    def delete_connection(self, tenant_id: str, platform: str, external_id: str) -> bool:
+        before = len(self.conns)
+        self.conns = [c for c in self.conns if not (
+            c["tenant_id"] == tenant_id and c["platform"] == platform and c["external_id"] == external_id)]
+        return len(self.conns) < before
 
     def revoke_api_key(self, raw: str) -> None:
         h = hash_key(raw)
@@ -81,6 +107,27 @@ class SupabaseStore:
         self.db.table("api_keys").insert(
             {"tenant_id": tenant_id, "label": label, "key_hash": hash_key(raw)}).execute()
         return raw
+
+    def list_tenants(self) -> list[dict]:
+        return (self.db.table("tenants").select("id, name, plan").order("created_at", desc=True).execute().data)
+
+    def get_tenant(self, tenant_id: str) -> dict | None:
+        rows = self.db.table("tenants").select("id, name, plan").eq("id", tenant_id).limit(1).execute().data
+        return rows[0] if rows else None
+
+    def list_keys(self, tenant_id: str) -> list[dict]:
+        return (self.db.table("api_keys").select("id, label, created_at, revoked_at")
+                .eq("tenant_id", tenant_id).order("created_at", desc=True).execute().data)
+
+    def revoke_key_by_id(self, tenant_id: str, key_id: str) -> bool:
+        rows = (self.db.table("api_keys").update({"revoked_at": datetime.now(timezone.utc).isoformat()})
+                .eq("tenant_id", tenant_id).eq("id", key_id).is_("revoked_at", "null").execute().data)
+        return bool(rows)
+
+    def delete_connection(self, tenant_id: str, platform: str, external_id: str) -> bool:
+        rows = (self.db.table("ad_connections").delete().eq("tenant_id", tenant_id)
+                .eq("platform", platform).eq("external_id", external_id).execute().data)
+        return bool(rows)
 
     def revoke_api_key(self, raw: str) -> None:
         self.db.table("api_keys").update({"revoked_at": datetime.now(timezone.utc).isoformat()}) \

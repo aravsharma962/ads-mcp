@@ -56,3 +56,10 @@ alter table tenants        enable row level security;
 alter table api_keys       enable row level security;
 alter table ad_connections enable row level security;
 alter table audit_log      enable row level security;
+
+-- Naye Supabase projects me service_role ko SQL-bani tables par auto access nahi milta.
+grant usage on schema public to service_role;
+grant select, insert, update, delete on all tables in schema public to service_role;
+grant usage, select on all sequences in schema public to service_role;
+alter default privileges in schema public grant select, insert, update, delete on tables to service_role;
+alter default privileges in schema public grant usage, select on sequences to service_role;

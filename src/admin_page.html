@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ads MCP Admin</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: #f4f5f7; color: #1c1e21; line-height: 1.4; }
+  header { background: #1f2937; color: #fff; padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; }
+  header h1 { font-size: 18px; margin: 0; }
+  main { max-width: 960px; margin: 0 auto; padding: 16px; }
+  .card { background: #fff; border-radius: 8px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  h2 { font-size: 16px; margin: 0 0 12px; }
+  label { display: block; font-size: 13px; margin: 8px 0 4px; color: #4b5563; }
+  input[type=text], input[type=password] { width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 16px; }
+  button { padding: 9px 14px; border: 0; border-radius: 6px; background: #2563eb; color: #fff; font-size: 14px; cursor: pointer; margin-top: 10px; }
+  button.danger { background: #dc2626; margin-top: 0; padding: 6px 10px; }
+  button.ghost { background: #e5e7eb; color: #111; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 10px 0; border-bottom: 1px solid #eef0f3; flex-wrap: wrap; }
+  li:last-child { border-bottom: 0; }
+  li.sel { background: #eff6ff; }
+  .name { font-weight: 600; word-break: break-word; cursor: pointer; }
+  .meta { font-size: 12px; color: #6b7280; }
+  .msg { font-size: 14px; margin-top: 8px; min-height: 18px; color: #b91c1c; }
+  .warn { background: #fef3c7; border: 1px solid #f59e0b; border-radius: 6px; padding: 10px; font-size: 14px; margin-top: 10px; }
+  .keybox { font-family: ui-monospace, Menlo, Consolas, monospace; background: #111827; color: #a7f3d0; padding: 10px; border-radius: 6px; word-break: break-all; margin: 8px 0; user-select: all; }
+  .hidden { display: none; }
+  .revoked { text-decoration: line-through; color: #9ca3af; }
+  @media (min-width: 720px) { .cols { display: grid; grid-template-columns: 1fr 2fr; gap: 16px; align-items: start; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Ads MCP Admin</h1>
+  <button id="logout" class="ghost hidden" type="button">Logout</button>
+</header>
+<main>
+  <section id="login" class="card">
+    <h2>Login</h2>
+    <form id="login-form">
+      <label for="pw">Admin password</label>
+      <input id="pw" type="password" autocomplete="current-password" required>
+      <button type="submit">Login</button>
+      <div class="msg" id="login-msg"></div>
+    </form>
+  </section>
+
+  <div id="app" class="cols hidden">
+    <section class="card">
+      <h2>Agencies</h2>
+      <ul id="tenants"></ul>
+      <form id="tenant-form">
+        <label for="tname">Naya agency banao (Create agency)</label>
+        <input id="tname" type="text" maxlength="100" required>
+        <button type="submit">Create agency</button>
+      </form>
+      <div class="msg" id="tenant-msg"></div>
+    </section>
+
+    <section id="detail" class="hidden">
+      <div class="card">
+        <h2 id="tenant-title"></h2>
+        <div class="meta" id="tenant-sub"></div>
+      </div>
+
+      <div class="card">
+        <h2>API keys</h2>
+        <ul id="keys"></ul>
+        <form id="key-form">
+          <label for="klabel">Key label (optional)</label>
+          <input id="klabel" type="text" maxlength="100">
+          <button type="submit">Create API key</button>
+        </form>
+        <div id="newkey" class="hidden">
+          <div class="warn">Yeh key sirf ek baar dikhegi. Abhi copy karke safe jagah save karo, baad mein dobara nahi milegi. (Shown only once - save it now.)</div>
+          <div class="keybox" id="newkey-val"></div>
+          <button type="button" id="copy" class="ghost">Copy</button>
+          <button type="button" id="dismiss" class="ghost">Maine save kar li</button>
+        </div>
+        <div class="msg" id="key-msg"></div>
+      </div>
+
+      <div class="card">
+        <h2>Connections</h2>
+        <ul id="conns"></ul>
+        <form id="conn-form">
+          <label for="acct">Meta ad account id (e.g. 1234567890 or act_1234567890)</label>
+          <input id="acct" type="text" autocomplete="off" required>
+          <label for="tok">Meta access token</label>
+          <input id="tok" type="password" autocomplete="new-password" required>
+          <button type="submit">Add Meta account</button>
+        </form>
+        <div class="msg" id="conn-msg"></div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script>
+(function () {
+  'use strict';
+  var BASE = '/admin/api';
+  var current = null;
+
+  function $(id) { return document.getElementById(id); }
+  function show(id, on) { $(id).classList.toggle('hidden', !on); }
+  function clear(node) { while (node.firstChild) { node.removeChild(node.firstChild); } }
+  function el(tag, text, cls) {
+    var n = document.createElement(tag);
+    if (text !== undefined && text !== null) { n.textContent = String(text); }
+    if (cls) { n.className = cls; }
+    return n;
+  }
+  function enc(s) { return encodeURIComponent(String(s)); }
+
+  function showLogin() {
+    current = null;
+    show('login', true); show('app', false); show('logout', false);
+    $('pw').value = '';
+    hideNewKey();
+  }
+  function showApp() {
+    show('login', false); show('app', true); show('logout', true);
+  }
+
+  function api(method, path, body) {
+    var opts = {
+      method: method,
+      credentials: 'same-origin',
+      headers: { 'X-Admin': '1', 'Accept': 'application/json' }
+    };
+    if (body !== undefined) {
+      opts.headers['Content-Type'] = 'application/json';
+      opts.body = JSON.stringify(body);
+    }
+    return fetch(BASE + path, opts).then(function (r) {
+      return r.text().then(function (t) {
+        var data = null;
+        try { data = t ? JSON.parse(t) : null; } catch (e) { data = null; }
+        return { status: r.status, ok: r.ok, data: data };
+      });
+    });
+  }
+
+  // returns null and resets UI on 401; otherwise the response
+  function guard(res, msgId) {
+    if (res.status === 401) {
+      showLogin();
+      $('login-msg').textContent = 'Session khatam. Dobara login karo.';
+      return null;
+    }
+    if (!res.ok) {
+      var m = (res.data && res.data.error) ? res.data.error : ('Error ' + res.status);
+      if (msgId) { $(msgId).textContent = m; }
+      return null;
+    }
+    if (msgId) { $(msgId).textContent = ''; }
+    return res;
+  }
+  function netFail(msgId) {
+    return function () { $(msgId).textContent = 'Network error. Dobara try karo.'; };
+  }
+
+  function hideNewKey() {
+    show('newkey', false);
+    $('newkey-val').textContent = '';
+  }
+
+  // ---- tenants
+  function loadTenants() {
+    return api('GET', '/tenants').then(function (res) {
+      if (!guard(res, 'tenant-msg')) { return; }
+      showApp();
+      var ul = $('tenants');
+      clear(ul);
+      var list = Array.isArray(res.data) ? res.data : [];
+      if (!list.length) { ul.appendChild(el('li', 'Abhi koi agency nahi hai.', 'meta')); }
+      list.forEach(function (t) {
+        var li = el('li', null, current === t.id ? 'sel' : '');
+        var left = el('div');
+        var nm = el('span', t.name, 'name');
+        nm.addEventListener('click', function () { selectTenant(t.id); });
+        left.appendChild(nm);
+        left.appendChild(el('div', 'plan: ' + t.plan, 'meta'));
+        var b = el('button', 'Open', 'ghost');
+        b.type = 'button';
+        b.addEventListener('click', function () { selectTenant(t.id); });
+        li.appendChild(left);
+        li.appendChild(b);
+        ul.appendChild(li);
+      });
+    }).catch(netFail('tenant-msg'));
+  }
+
+  function selectTenant(tid) {
+    if (current !== tid) { hideNewKey(); }
+    current = tid;
+    return loadDetail().then(loadTenants);
+  }
+
+  function loadDetail() {
+    if (!current) { return Promise.resolve(); }
+    return api('GET', '/tenants/' + enc(current)).then(function (res) {
+      if (!guard(res, 'tenant-msg')) { return; }
+      var d = res.data || {};
+      var t = d.tenant || {};
+      show('detail', true);
+      $('tenant-title').textContent = t.name || '';
+      $('tenant-sub').textContent = 'id: ' + (t.id || '') + '  |  plan: ' + (t.plan || '');
+
+      var kul = $('keys'); clear(kul);
+      var keys = d.keys || [];
+      if (!keys.length) { kul.appendChild(el('li', 'Koi key nahi.', 'meta')); }
+      keys.forEach(function (k) {
+        var li = el('li');
+        var left = el('div');
+        left.appendChild(el('div', k.label || '(no label)', k.revoked_at ? 'name revoked' : 'name'));
+        var info = 'created: ' + (k.created_at || '-') + (k.revoked_at ? '  |  revoked: ' + k.revoked_at : '  |  active');
+        left.appendChild(el('div', info, 'meta'));
+        li.appendChild(left);
+        if (!k.revoked_at) {
+          var b = el('button', 'Revoke', 'danger');
+          b.type = 'button';
+          b.addEventListener('click', function () {
+            if (!window.confirm('Is key ko revoke karna hai?')) { return; }
+            api('DELETE', '/tenants/' + enc(current) + '/keys/' + enc(k.id)).then(function (r) {
+              if (guard(r, 'key-msg')) { loadDetail(); }
+            }).catch(netFail('key-msg'));
+          });
+          li.appendChild(b);
+        }
+        kul.appendChild(li);
+      });
+
+      var cul = $('conns'); clear(cul);
+      var conns = d.connections || [];
+      if (!conns.length) { cul.appendChild(el('li', 'Koi connection nahi.', 'meta')); }
+      conns.forEach(function (c) {
+        var li = el('li');
+        var left = el('div');
+        left.appendChild(el('div', c.external_id, 'name'));
+        left.appendChild(el('div', c.platform || 'meta', 'meta'));
+        li.appendChild(left);
+        var b = el('button', 'Remove', 'danger');
+        b.type = 'button';
+        b.addEventListener('click', function () {
+          if (!window.confirm('Is account ko hatana hai?')) { return; }
+          api('DELETE', '/tenants/' + enc(current) + '/connections/' + enc(c.external_id)).then(function (r) {
+            if (guard(r, 'conn-msg')) { loadDetail(); }
+          }).catch(netFail('conn-msg'));
+        });
+        li.appendChild(b);
+        cul.appendChild(li);
+      });
+    }).catch(netFail('tenant-msg'));
+  }
+
+  // ---- events
+  $('login-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var pw = $('pw').value;
+    $('login-msg').textContent = '';
+    api('POST', '/login', { password: pw }).then(function (res) {
+      $('pw').value = '';
+      if (res.status === 429) { $('login-msg').textContent = 'Bahut saari koshish. Thodi der baad try karo.'; return; }
+      if (res.status === 401) { $('login-msg').textContent = 'Galat password.'; return; }
+      if (!res.ok) { $('login-msg').textContent = 'Error ' + res.status; return; }
+      loadTenants();
+    }).catch(netFail('login-msg'));
+  });
+
+  $('logout').addEventListener('click', function () {
+    api('POST', '/logout', {}).then(showLogin, showLogin);
+  });
+
+  $('tenant-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var name = $('tname').value.trim();
+    if (!name) { $('tenant-msg').textContent = 'Naam khali nahi ho sakta.'; return; }
+    api('POST', '/tenants', { name: name }).then(function (res) {
+      if (!guard(res, 'tenant-msg')) { return; }
+      $('tname').value = '';
+      current = res.data && res.data.id ? res.data.id : current;
+      hideNewKey();
+      loadTenants().then(loadDetail);
+    }).catch(netFail('tenant-msg'));
+  });
+
+  $('key-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    if (!current) { return; }
+    api('POST', '/tenants/' + enc(current) + '/keys', { label: $('klabel').value.trim() }).then(function (res) {
+      if (!guard(res, 'key-msg')) { return; }
+      $('klabel').value = '';
+      $('newkey-val').textContent = (res.data && res.data.key) || '';
+      show('newkey', true);
+      loadDetail();
+    }).catch(netFail('key-msg'));
+  });
+
+  $('copy').addEventListener('click', function () {
+    var txt = $('newkey-val').textContent;
+    var done = function () { $('copy').textContent = 'Copied!'; };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(txt).then(done, function () { selectKey(); });
+    } else { selectKey(); }
+  });
+  function selectKey() {
+    var r = document.createRange();
+    r.selectNodeContents($('newkey-val'));
+    var s = window.getSelection();
+    s.removeAllRanges(); s.addRange(r);
+    $('copy').textContent = 'Select ho gayi, ab Ctrl+C dabao';
+  }
+  $('dismiss').addEventListener('click', function () { hideNewKey(); $('copy').textContent = 'Copy'; });
+
+  $('conn-form').addEventListener('submit', function (e) {
+    e.preventDefault();
+    if (!current) { return; }
+    var account = $('acct').value.trim();
+    var token = $('tok').value.trim();
+    if (!account || !token) { $('conn-msg').textContent = 'Account id aur token dono chahiye.'; return; }
+    api('POST', '/tenants/' + enc(current) + '/connections', { account: account, token: token }).then(function (res) {
+      $('tok').value = '';
+      if (!guard(res, 'conn-msg')) { return; }
+      $('acct').value = '';
+      loadDetail();
+    }).catch(function () { $('tok').value = ''; netFail('conn-msg')(); });
+  });
+
+  // initial: if a session cookie already exists the list call succeeds, else 401 -> login form
+  loadTenants();
+})();
+</script>
+</body>
+</html>

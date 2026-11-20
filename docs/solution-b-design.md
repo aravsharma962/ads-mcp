@@ -24,14 +24,20 @@ Claude/any MCP client --(HTTPS, Bearer agency-key)--> Vercel (api/index.py, ASGI
 3. TOKEN_ENC_KEY generate: python -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())"
 
 ## Vercel deploy
-1. Repo import (Private repo pehle karo). Env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TOKEN_ENC_KEY.
+1. Repo import (Private repo pehle karo). Env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TOKEN_ENC_KEY, ADMIN_PASSWORD, ADMIN_SESSION_SECRET (random 32+ chars).
+   Note: ADMIN_PASSWORD kam se kam 16 characters ka strong rakho (chhota ho to /admin band rahega), kyunki /admin page saare tenants ke tokens control karta hai.
+   Note: naye Supabase projects me grants chahiye; woh lines supabase/migrations/001_init.sql me already append hain.
 2. Deploy, phir GET /health aur ek MCP initialize call se test karo.
 3. Hobby plan non-commercial hai: agencies se paise lene se pehle Vercel Pro.
 
-## Agency onboarding (abhi manual)
+## Agency onboarding
+Primary: browser me https://<app>.vercel.app/admin kholo, ADMIN_PASSWORD se login karo. Wahan: agency create karo, API key create karo (sirf ek baar dikhti hai), Meta account (act_...) + token add karo.
+
+Fallback CLI (scripts/admin.py):
 python scripts/admin.py create-tenant "Agency X"
-python scripts/admin.py add-account <tenant> meta act_123 <token>
-python scripts/admin.py create-key <tenant>   # key sirf ek baar dikhti hai
+python scripts/admin.py create-key <tenant_id> [label]   # key sirf ek baar dikhti hai
+python scripts/admin.py add-meta <tenant_id> act_123      # token ke liye prompt aata hai
+python scripts/admin.py list <tenant_id>
 Agency Claude me connector add kare: https://<app>.vercel.app/mcp + header Authorization: Bearer <key>
 
 ## Risks / untested
@@ -48,3 +54,7 @@ Agency Claude me connector add kare: https://<app>.vercel.app/mcp + header Autho
 4. Meta OAuth onboarding (token paste ki jagah).
 5. Google Ads tools (Developer Token chahiye, abhi apply karo).
 6. Rate limits, billing/plans, write tools with approval.
+
+## Admin panel notes
+- Logout cookie client se hatata hai; session stateless hai, isliye chori hui cookie 8h tak chalti hai. Turant band karna ho to ADMIN_SESSION_SECRET badal do.
+- Login rate limit: 5 galat/IP/15 min, aur sab IP milakar 50. Serverless me har instance ka apna count hai (best-effort). Attack me asli admin bhi 15 min lock ho sakta hai.

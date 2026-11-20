@@ -38,3 +38,8 @@ def current_tenant() -> Tenant:
     if t is None:
         raise PermissionError("Authenticated tenant nahi mila")
     return t
+
+
+def norm_account(external_id: str) -> str:
+    external_id = external_id.strip()
+    return external_id if external_id.startswith("act_") else f"act_{external_id}"

@@ -10,10 +10,12 @@ import anyio
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
+import admin_app
+import admin_auth
 from ads_api import MetaError, get_meta_campaigns
 from store import get_store
 from targets import check_campaign
-from tenancy import current_tenant, reset_current, set_current
+from tenancy import current_tenant, norm_account, reset_current, set_current
 
 # Host check band: hum Host header par nahi, API key par bharosa karte hain.
 mcp = FastMCP(
@@ -24,16 +26,13 @@ mcp = FastMCP(
 )
 
 
-def _norm_account(external_id: str) -> str:
-    external_id = external_id.strip()
-    return external_id if external_id.startswith("act_") else f"act_{external_id}"
 
 
 def _meta_rows(tool: str, external_id: str, date_preset: str):
     """Common raasta: ownership check + audit + Meta call. (rows, None) ya (None, error_dict)."""
     tenant = current_tenant()
     store = get_store()
-    account = _norm_account(external_id)
+    account = norm_account(external_id)
     args = {"external_id": account, "date_preset": date_preset}
 
     token = store.get_token(tenant.id, "meta", account)
@@ -105,6 +104,10 @@ class TenantAuth:
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":          # lifespan etc.
             return await self.app(scope, receive, send)
+        if scope["path"] == "/admin" or scope["path"].startswith("/admin/"):
+            if not admin_auth.admin_enabled():                  # band hai to har /admin path 404
+                return await self._json(send, 404, {"error": "Not found"})
+            return await admin_app.app(scope, receive, send)   # apna password+cookie auth
         if scope["path"] == "/health":
             return await self._json(send, 200, {"status": "ok"})
 

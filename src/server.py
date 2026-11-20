@@ -1,6 +1,6 @@
 """MCP server: Claude yahan se hamare tools call karta hai."""
 from mcp.server.fastmcp import FastMCP
-
+from targets import check_campaign
 from ads_api import MetaError, get_meta_campaigns
 
 mcp = FastMCP("ads-manager")

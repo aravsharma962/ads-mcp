@@ -154,6 +154,22 @@ def main():
             assert c2.request(m, p, headers=h).status_code == 401     # tenant Bearer key admin nahi kholti
         print("OK  /health, /mcp 401 waise hi; tenant key admin API nahi kholti")
 
+        # --- store crash: admin ko error ka type/detail dikhe, bina login ke nahi ---
+        c3 = TestClient(hosted_app.app, base_url="http://localhost", raise_server_exceptions=False)
+        orig = store.list_tenants
+        store.list_tenants = lambda: (_ for _ in ()).throw(RuntimeError("supabase down: boom-detail"))
+        try:
+            admin_auth.limiter.reset("testclient")
+            assert c3.post("/admin/api/login", json={"password": os.environ["ADMIN_PASSWORD"]}, headers=X).status_code == 200
+            r = c3.get("/admin/api/tenants")
+            assert r.status_code == 500 and r.json()["type"] == "RuntimeError", r.text
+            assert "boom-detail" in r.json()["detail"]
+            r = TestClient(hosted_app.app, base_url="http://localhost", raise_server_exceptions=False).get("/admin/api/tenants")
+            assert r.status_code == 401        # bina login ke 401, detail nahi
+        finally:
+            store.list_tenants = orig
+        print("OK  store crash -> 500 JSON {type, detail} sirf logged-in admin ko")
+
         # --- logout ---
         assert req(c, "POST", "/admin/api/logout", headers=X).status_code == 200
         assert req(c, "GET", "/admin/api/tenants").status_code == 401

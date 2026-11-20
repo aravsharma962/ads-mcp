@@ -152,7 +152,10 @@
       return null;
     }
     if (!res.ok) {
-      var m = (res.data && res.data.error) ? res.data.error : ('Error ' + res.status);
+      var d = res.data || {};
+      var m = d.error ? d.error : ('Error ' + res.status);
+      if (d.type) { m += ' [' + d.type + ']'; }
+      if (d.detail) { m += ': ' + d.detail; }
       if (msgId) { $(msgId).textContent = m; }
       return null;
     }

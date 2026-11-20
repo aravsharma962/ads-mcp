@@ -5,6 +5,7 @@ Raw API key sirf create-key response me aati hai; token kabhi kisi response me n
 """
 import os
 import re
+import traceback
 from pathlib import Path
 
 import anyio
@@ -172,6 +173,15 @@ async def remove_connection(request: Request):
     return JSONResponse({"ok": True}) if ok else _err(404, "Account nahi mila")
 
 
+async def on_error(request: Request, exc: Exception):
+    """Store/Supabase crash: traceback logs me, aur sirf logged-in admin ko error ka type + detail."""
+    traceback.print_exception(exc)
+    body = {"error": "Server error"}
+    if admin_auth.verify_session(request.cookies.get("admin_session")):
+        body.update(type=type(exc).__name__, detail=str(exc)[:500])
+    return JSONResponse(body, status_code=500)
+
+
 class SecurityHeaders:
     """Har admin response par: no-store, nosniff, no-referrer, frame DENY."""
 
@@ -201,4 +211,4 @@ _routes = [
     Route("/admin/api/tenants/{tid}/connections", add_connection, methods=["POST"]),
     Route("/admin/api/tenants/{tid}/connections/{external_id}", remove_connection, methods=["DELETE"]),
 ]
-app = SecurityHeaders(Starlette(routes=_routes))
+app = SecurityHeaders(Starlette(routes=_routes, exception_handlers={Exception: on_error}))

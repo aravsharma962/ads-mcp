@@ -105,3 +105,12 @@ Order matters:
 2. Deploy the hub (Vercel project for the repo root): it now returns `frequency` and `reach`, and ignores `page_leave` events.
 3. Deploy the web app (Vercel project with root directory `web`). `public/t.js` is rebuilt by `npm run build`; sites using the snippet pick up bounce tracking automatically (browsers may cache the old file for a while).
 4. `git add -f web/src/lib` (the local .gitignore ignores `lib/`).
+
+## Phase 2A (approve and apply to Meta)
+
+Writes are OFF by default. Order:
+1. Run `supabase/migrations/006_action_log.sql` in the Supabase SQL editor.
+2. Deploy hub and web (push to GitHub).
+3. To turn writes on set BOTH env vars and redeploy: hub `ENABLE_META_WRITES=1`, web `META_WRITES_ENABLED=1`.
+4. The connected Meta token must have the `ads_management` permission. With a read-only token the platform shows a "permission" message and changes nothing.
+5. Test first on your own ad account with one test ad.

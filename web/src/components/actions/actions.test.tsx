@@ -235,3 +235,93 @@ describe("views", () => {
     expect(screen.getByLabelText(/Max frequency/)).toBeInTheDocument();
   });
 });
+
+import ApplyConfirm from "./ApplyConfirm";
+import ChangeLog from "./ChangeLog";
+import type { ActionLogRow } from "@/lib/actions/types";
+
+const logRow = (o: Partial<ActionLogRow> = {}): ActionLogRow => ({
+  id: "l1", created_at: new Date().toISOString(), user_id: "u1", ad_id: "a1", ad_name: "Ad one", action: "pause", level: "ad", object_id: "a1",
+  before: {}, after: {}, status: "ok", error: null, ...o,
+});
+const viewPayload = (actions: AdAction[]) => ({ currency: "USD", business_type: "lead_gen", result_label: "lead", rules: DEFAULT_ACTION_RULES,
+  windows: { recent: { from: "2026-11-01", to: "2026-11-07" }, previous: { from: "2026-10-25", to: "2026-10-31" } }, actions, winners: [], counts: { too_early: 0, keep_watch: 0, scale: 0, refresh_creative: 0, pause: 0 } });
+const setup = (actions: AdAction[], applyGet: unknown, post?: () => Response) => {
+  fetchMock.mockImplementation(async (u: string, init?: RequestInit) => {
+    if (u.endsWith("/apply")) return init?.method === "POST" ? post!() : json(applyGet);
+    return json(viewPayload(actions));
+  });
+};
+
+describe("Phase 2A apply UI", () => {
+  it("ApplyConfirm states the change and needs a second click", () => {
+    const onConfirm = vi.fn();
+    render(<ApplyConfirm adName="Ad one" action="pause" busy={false} error={null} onConfirm={onConfirm} onCancel={() => {}} />);
+    expect(screen.getByRole("dialog")).toHaveTextContent('Pause ad "Ad one" in your live Meta account');
+    fireEvent.click(screen.getByRole("button", { name: "Confirm change in Meta" }));
+    expect(onConfirm).toHaveBeenCalledOnce();
+  });
+  it("ChangeLog lists entries and empty state", () => {
+    const { unmount } = render(<ChangeLog log={[logRow(), logRow({ id: "l2", status: "error", error: "Boom" })]} />);
+    expect(screen.getByText("Applied")).toBeInTheDocument();
+    expect(screen.getByText("Boom")).toBeInTheDocument();
+    unmount();
+    render(<ChangeLog log={[]} />);
+    expect(screen.getByText(/No changes made/)).toBeInTheDocument();
+  });
+  it("shows the right button per verdict and resume after a pause", async () => {
+    setup([ad({ ad_id: "p", name: "P", verdict: "pause" }), ad({ ad_id: "s", name: "S", verdict: "scale" }), ad({ ad_id: "r", name: "R", verdict: "keep_watch" }), ad({ ad_id: "k", name: "K", verdict: "keep_watch" })],
+      { writes_enabled: true, log: [logRow({ id: "x", ad_id: "r", ad_name: "R" })] });
+    render(<ActionsView clientId="c1" isOwner />);
+    expect(await screen.findByRole("button", { name: "Pause in Meta" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Raise budget 20%" })).toBeEnabled();
+    expect(screen.getAllByRole("button", { name: "Resume" })).toHaveLength(1);
+  });
+  it("no resume when a later ok entry is not a pause", async () => {
+    setup([ad({ ad_id: "r", verdict: "keep_watch" })], { writes_enabled: true, log: [logRow({ id: "n", ad_id: "r", action: "resume" }), logRow({ id: "o", ad_id: "r" })] });
+    render(<ActionsView clientId="c1" isOwner />);
+    await screen.findByText("Ad one", { selector: "span" });
+    await screen.findByText("Recent changes");
+    expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+  });
+  it("non-owner sees disabled buttons with a reason", async () => {
+    setup([ad({ verdict: "pause" })], { writes_enabled: true, log: [] });
+    render(<ActionsView clientId="c1" isOwner={false} />);
+    const btn = await screen.findByRole("button", { name: "Pause in Meta" });
+    expect(btn).toBeDisabled();
+    expect(screen.getByText("Only the agency owner can change ads in Meta.")).toBeInTheDocument();
+  });
+  it("scale in cooldown is disabled", async () => {
+    setup([ad({ verdict: "scale" })], { writes_enabled: true, log: [logRow({ action: "scale", level: "adset" })] });
+    render(<ActionsView clientId="c1" isOwner />);
+    expect(await screen.findByRole("button", { name: "Raise budget 20%" })).toBeDisabled();
+    expect(screen.getByText(/raised in the last 3 days/i)).toBeInTheDocument();
+  });
+  it("writes disabled shows the not-enabled state and disables buttons", async () => {
+    setup([ad({ verdict: "pause" })], { writes_enabled: false, log: [] });
+    render(<ActionsView clientId="c1" isOwner />);
+    expect((await screen.findAllByText(/Changes in Meta are not enabled/)).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByRole("button", { name: "Pause in Meta" })).toBeDisabled();
+  });
+  it("confirm flow posts, shows the API note and refreshes", async () => {
+    setup([ad({ verdict: "pause" })], { writes_enabled: true, log: [] },
+      () => json({ ok: true, action: "pause", ad_id: "a1", level: "ad", object_id: "a1", before: {}, after: {}, note: "Ad paused in Meta." }));
+    render(<ActionsView clientId="c1" isOwner />);
+    fireEvent.click(await screen.findByRole("button", { name: "Pause in Meta" }));
+    const posts = () => fetchMock.mock.calls.filter((c) => c[1]?.method === "POST");
+    expect(posts()).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Confirm change in Meta" }));
+    expect(await screen.findByText("Ad paused in Meta.")).toBeInTheDocument();
+    expect(posts()).toHaveLength(1);
+    expect(JSON.parse(posts()[0][1].body)).toEqual({ ad_id: "a1", action: "pause" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+  it("shows the API error in the dialog and keeps it open", async () => {
+    setup([ad({ verdict: "pause" })], { writes_enabled: true, log: [] }, () => json({ error: "Only owners can apply changes." }, 403));
+    render(<ActionsView clientId="c1" isOwner />);
+    fireEvent.click(await screen.findByRole("button", { name: "Pause in Meta" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm change in Meta" }));
+    expect(await screen.findByRole("alert", {}, { timeout: 2000 })).toHaveTextContent("Only owners can apply changes.");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+});

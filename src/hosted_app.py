@@ -13,11 +13,20 @@ from mcp.server.transport_security import TransportSecuritySettings
 import admin_app
 import admin_auth
 import internal_api
-from ads_api import MetaError, get_meta_campaigns, get_meta_insights
+import contextvars
+
+from ads_api import MetaError, get_meta_campaigns, get_meta_insights, raise_budget, set_object_status
 from performance import DENIED, performance_for_client
 from store import get_store
 from targets import check_campaign
 from tenancy import current_tenant, norm_account, reset_current, set_current
+
+# Write tools sirf tab chalte hain jab internal_api.tools_call ise True kare. Default False: public /mcp par kabhi nahi.
+writes_allowed: contextvars.ContextVar[bool] = contextvars.ContextVar("writes_allowed", default=False)
+
+# Write tools alag FastMCP instance mein: public /mcp (mcp.streamable_http_app) ko ye dikhte hi nahi.
+# Sirf internal_api inhe list/call karta hai.
+write_mcp = FastMCP("ads-manager-writes")
 
 # Host check band: hum Host header par nahi, API key par bharosa karte hain.
 mcp = FastMCP(
@@ -99,6 +108,66 @@ def meta_ads_insights(external_id: str, date_from: str, date_to: str, level: str
         return {"error": str(e)}
     store.log_audit(tenant.id, tenant.key_label, "meta_ads_insights", args, "ok")
     return out
+
+
+NOT_AVAILABLE = "Write tools are not available on this connection."
+NOT_ENABLED = "Changes in Meta are not enabled on this platform."
+WRITE_LEVELS = {"ad", "adset", "campaign"}
+
+
+def _write_call(tool: str, args: dict, level: str, external_id: str, fn):
+    """Write tools ka common raasta. Gates: internal API (ContextVar) -> ENABLE_META_WRITES=1 -> tenant ka account
+    -> input check -> Meta call. Har call audit hota hai. fn(token, account) -> {"before","after"}."""
+    tenant = current_tenant()
+    store = get_store()
+
+    def done(result: str, out: dict):
+        store.log_audit(tenant.id, tenant.key_label, tool, args, result)
+        return out
+
+    if not writes_allowed.get():                       # public /mcp par hamesha False
+        return done("denied", {"error": NOT_AVAILABLE})
+    if os.environ.get("ENABLE_META_WRITES") != "1":
+        return done("denied", {"error": NOT_ENABLED})
+    if level not in WRITE_LEVELS:
+        return done("denied", {"error": f"Invalid level. Choose one of: {sorted(WRITE_LEVELS)}"})
+    account = norm_account(external_id)
+    token = store.get_token(tenant.id, "meta", account)
+    if token is None:
+        return done("denied", {"error": "You do not have access to this account."})
+    try:
+        res = fn(token, account)
+    except MetaError as e:
+        msg = str(e)
+        forbidden = msg.startswith(("forbidden", "Invalid", "unchanged"))
+        return done("denied" if forbidden else "error", {"error": msg})
+    return done("ok", {"ok": True, "object_id": args["object_id"], "level": level, **res})
+
+
+@write_mcp.tool()
+def meta_set_status(external_id: str, object_id: str, level: str, status: str) -> dict:
+    """Pause or resume one Meta ad, ad set or campaign (changes the live account).
+
+    external_id: ad account ID. object_id: the ad/adset/campaign ID. level: ad, adset or campaign.
+    status: PAUSED or ACTIVE. Only available through the platform's internal API, never over MCP.
+    """
+    account = norm_account(external_id)
+    args = {"external_id": account, "object_id": object_id, "level": level, "status": status}
+    return _write_call("meta_set_status", args, level, external_id,
+                       lambda token, acc: set_object_status(object_id, status, token, acc))
+
+
+@write_mcp.tool()
+def meta_raise_budget(external_id: str, object_id: str, level: str, percent: int) -> dict:
+    """Raise the daily budget of one Meta ad set or campaign by 1 to 20 percent (changes the live account).
+
+    external_id: ad account ID. object_id: the adset/campaign ID. level: adset or campaign. percent: whole
+    number 1..20. Never lowers a budget, never touches lifetime budgets. Internal API only, never over MCP.
+    """
+    account = norm_account(external_id)
+    args = {"external_id": account, "object_id": object_id, "level": level, "percent": percent}
+    return _write_call("meta_raise_budget", args, level, external_id,
+                       lambda token, acc: raise_budget(object_id, percent, token, acc))
 
 
 @mcp.tool()

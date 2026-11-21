@@ -79,3 +79,19 @@ export type LeadsResponse = {
   tracking: boolean;                     // false when the client has no tracker site (list is empty)
   ad_account?: boolean;                  // false when no ad account is connected: spend is 0 and costs are null
 };
+
+/** Phase 2A: approve-and-apply (writes to Meta). */
+export const APPLY_ACTIONS = ["pause", "scale", "resume"] as const;
+export type ApplyAction = (typeof APPLY_ACTIONS)[number];
+export type ApplyRequest = { ad_id: string; action: ApplyAction };
+export type ApplyResponse = {
+  ok: true; action: ApplyAction; ad_id: string; level: "ad" | "adset" | "campaign"; object_id: string;
+  before: { status?: string; daily_budget?: number }; after: { status?: string; daily_budget?: number };
+  note: string;                         // plain English, e.g. "Ad set budget raised from 1,000 to 1,200 (+20%)."
+};
+export type ActionLogRow = {
+  id: string; created_at: string; user_id: string | null; ad_id: string; ad_name: string | null;
+  action: ApplyAction; level: "ad" | "adset" | "campaign"; object_id: string;
+  before: Record<string, unknown>; after: Record<string, unknown>; status: "ok" | "error" | "unknown" | "pending"; error: string | null;
+};
+export type ApplyLogResponse = { log: ActionLogRow[]; writes_enabled: boolean };

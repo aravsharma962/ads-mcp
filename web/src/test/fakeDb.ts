@@ -5,6 +5,8 @@ type Result = { data: any; error: { message: string; code?: string } | null; cou
 export class FakeDb {
   tables: Record<string, Row[]> = {};
   seq = 0;
+  /** Per-table insert hook: may fill DB defaults on the row and return an error (e.g. unique violation). */
+  hooks: Record<string, (row: Row, rows: Row[]) => { message: string; code?: string } | null> = {};
   constructor(seed: Record<string, Row[]> = {}) {
     for (const [k, v] of Object.entries(seed)) this.tables[k] = v.map((r) => ({ ...r }));
   }
@@ -74,6 +76,8 @@ class Query implements PromiseLike<Result> {
           const ex = rows.find((r) => this.onConflict!.every((k) => r[k] === row[k]));
           if (ex) { Object.assign(ex, row); out.push(ex); continue; }
         }
+        const hookErr = this.db.hooks[this.table]?.(row, rows);
+        if (hookErr) return { data: null, error: hookErr };
         rows.push(row);
         out.push(row);
       }

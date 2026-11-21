@@ -185,6 +185,97 @@ def _meta_get(url: str, token: str, params: dict) -> dict:
     return resp.json()
 
 
+UNKNOWN_MSG = "unknown: Meta did not confirm the change. Check Ads Manager before trying again."
+PERMISSION_MSG = "permission: the connected token cannot change ads (ads_management is missing)."
+
+
+def _meta_post(url: str, token: str, data: dict) -> dict:
+    """Meta write call. Token header mein jata hai. Permission error (code 200/10/#200) plain message banta hai."""
+    try:
+        resp = requests.post(url, headers={"Authorization": f"Bearer {token}"}, data=data, timeout=30)
+    except requests.RequestException:
+        raise MetaError(UNKNOWN_MSG)          # request may have reached Meta: outcome unclear
+    if resp.status_code >= 500:
+        raise MetaError(UNKNOWN_MSG)
+    if resp.status_code != 200:
+        err = {}
+        try:
+            err = resp.json()["error"]
+            msg = err["message"]
+        except Exception:
+            msg = resp.text[:200]
+        code = err.get("code") if isinstance(err, dict) else None
+        if code in (200, 10) or str(msg).startswith("(#200)"):
+            raise MetaError(PERMISSION_MSG)
+        raise MetaError(f"Meta API error {resp.status_code}: {msg}")
+    try:
+        out = resp.json()
+    except ValueError:
+        raise MetaError(UNKNOWN_MSG)
+    if not (isinstance(out, dict) and out.get("success") is True):
+        raise MetaError(UNKNOWN_MSG)
+    return out
+
+
+WRITE_STATUSES = {"ACTIVE", "PAUSED"}
+MAX_RAISE_PERCENT = 20
+MIN_RAISABLE_BUDGET = 20     # minor units; below this the old+1 floor would exceed the 20% cap by a lot
+
+
+def _object_url(object_id: str, version: str | None) -> str:
+    # Sirf digits: id se URL path ke bahar nikalna (../, ?x=) mumkin nahi.
+    if not isinstance(object_id, str) or not object_id.isascii() or not object_id.isdigit():
+        raise MetaError("Invalid object id (digits only).")
+    version = version or os.environ.get("META_API_VERSION", "v27.0")
+    return f"https://graph.facebook.com/{version}/{object_id}"
+
+
+def _check_same_account(obj: dict, account: str) -> None:
+    """Object ka account_id connected account se na mile (ya na ho) to refuse. Meta account_id bina 'act_' deta hai."""
+    got = str(obj.get("account_id") or "").strip()
+    got = got if got.startswith("act_") else f"act_{got}"
+    want = account.strip()
+    want = want if want.startswith("act_") else f"act_{want}"
+    if got == "act_" or got != want:
+        raise MetaError("forbidden: this object does not belong to the connected ad account.")
+
+
+def set_object_status(object_id: str, status: str, token: str, account: str,
+                      version: str | None = None) -> dict:
+    """Ad / adset / campaign ko ACTIVE ya PAUSED karta hai. Pehle verify: object isi account ka hai."""
+    if status not in WRITE_STATUSES:
+        raise MetaError(f"Invalid status. Choose one of: {sorted(WRITE_STATUSES)}")
+    url = _object_url(object_id, version)
+    obj = _meta_get(url, token, {"fields": "account_id,status"})
+    _check_same_account(obj, account)
+    current = obj.get("status")
+    needed = {"PAUSED": "ACTIVE", "ACTIVE": "PAUSED"}[status]     # pause only ACTIVE, resume only PAUSED
+    if current != needed:
+        raise MetaError(f"unchanged: this object is currently {current} in Meta, so nothing was changed.")
+    _meta_post(url, token, {"status": status})
+    return {"before": {"status": obj.get("status")}, "after": {"status": status}}
+
+
+def raise_budget(object_id: str, percent: int, token: str, account: str,
+                 version: str | None = None) -> dict:
+    """Daily budget ko 1..20% badhata hai (kabhi ghatata nahi). Lifetime budget par refuse. Minor currency units."""
+    if type(percent) is not int or not 1 <= percent <= MAX_RAISE_PERCENT:
+        raise MetaError(f"Invalid percent: must be a whole number from 1 to {MAX_RAISE_PERCENT}.")
+    url = _object_url(object_id, version)
+    obj = _meta_get(url, token, {"fields": "account_id,daily_budget,lifetime_budget"})
+    _check_same_account(obj, account)
+    if int(_num(obj.get("lifetime_budget"))) > 0:
+        raise MetaError("budget_not_here: this object uses a lifetime budget, which cannot be changed here.")
+    old = int(_num(obj.get("daily_budget")))
+    if old <= 0:
+        raise MetaError("budget_not_here: this object has no daily budget (it may be set on the campaign or ad set).")
+    if old < MIN_RAISABLE_BUDGET:
+        raise MetaError("budget_not_here: budget is too small to raise safely")
+    new = max((old * (100 + percent) + 50) // 100, old + 1)
+    _meta_post(url, token, {"daily_budget": str(new)})
+    return {"before": {"daily_budget": old}, "after": {"daily_budget": new}}
+
+
 MAX_PAGES = 50
 
 

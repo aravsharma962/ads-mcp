@@ -102,8 +102,8 @@ async def account_delete(request: Request, tenant: Tenant):
 
 @_guarded
 async def tools_list(request: Request, tenant: Tenant):
-    from hosted_app import mcp          # late import: hosted_app imports this module
-    tools = await mcp.list_tools()
+    from hosted_app import mcp, write_mcp          # late import: hosted_app imports this module
+    tools = await mcp.list_tools() + await write_mcp.list_tools()
     return JSONResponse([{"name": t.name, "description": t.description or "", "input_schema": t.inputSchema}
                          for t in tools])
 
@@ -129,23 +129,29 @@ def _unwrap(out):
 
 @_guarded
 async def tools_call(request: Request, tenant: Tenant):
-    from hosted_app import mcp
+    from hosted_app import mcp, write_mcp, writes_allowed
     data = await _json_body(request)
     name = _s(data, "name")
     args = data.get("arguments") or {}
     if not name or not isinstance(args, dict):
         return _err(400, "name and arguments (object) required")
-    if name not in {t.name for t in await mcp.list_tools()}:
+    if name in {t.name for t in await write_mcp.list_tools()}:
+        target = write_mcp                          # write tools: sirf yahin se, public /mcp par nahi
+    elif name in {t.name for t in await mcp.list_tools()}:
+        target = mcp
+    else:
         return _err(404, "Unknown tool")
     ctx = set_current(tenant)                       # tool isi tenant ke naam se chalta hai
+    wctx = writes_allowed.set(True)                 # SIRF yahin True hota hai (secret + tenant verify ke baad)
     try:
-        out = await mcp.call_tool(name, args)
+        out = await target.call_tool(name, args)
     except ToolError as e:
         return _err(400, redact(str(e))[:500])
     except Exception as e:
         print(redact("".join(traceback.format_exception(e))), file=sys.stderr)
         return _err(500, "Tool failed")
     finally:
+        writes_allowed.reset(wctx)
         reset_current(ctx)
     return JSONResponse({"result": _unwrap(out)})
 

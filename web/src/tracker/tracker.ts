@@ -89,6 +89,36 @@ export function start(opts: { win: Window; siteKey: string; origin: string; cons
     }
   }
 
+  // Dwell time = time the document was visible. visibilitychange is the reliable signal on iOS Safari and
+  // in-app browsers (pagehide often never fires); whichever comes first sends the one page_leave.
+  const isVisible = () => win.document.visibilityState !== "hidden";
+  let visibleMs = 0;
+  let visibleSince: number | null = isVisible() ? Date.now() : null;
+  let left = false;
+  const leave = () => {
+    if (left) return;
+    try {
+      if (visibleSince !== null) {
+        visibleMs += Math.max(0, Date.now() - visibleSince);
+        visibleSince = null;
+      }
+      if (!active) return;            // nothing before consent; a later hide/pagehide may still report
+      left = true;
+      send("page_leave", { value: Math.min(86400, Math.max(0, Math.floor(visibleMs / 1000))) });
+    } catch {
+      /* tracking must never break the page */
+    }
+  };
+  win.addEventListener("pagehide", leave);
+  win.document.addEventListener("visibilitychange", () => {
+    try {
+      if (!isVisible()) leave();
+      else if (!left && visibleSince === null) visibleSince = Date.now();
+    } catch {
+      /* tracking must never break the page */
+    }
+  });
+
   const track = ((name: string, props?: TrackProps) => send(String(name), props)) as AdsTrack;
   track.consent = () => {
     if (active) return;

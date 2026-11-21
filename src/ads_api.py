@@ -102,7 +102,7 @@ def get_meta_campaigns(date_preset: str = "last_7d", token: str | None = None,
 VALID_LEVELS = {"campaign", "adset", "ad"}
 INSIGHTS_FIELDS = (
     "campaign_id,campaign_name,adset_id,adset_name,ad_id,ad_name,account_currency,"
-    "spend,impressions,inline_link_clicks,actions,action_values"
+    "spend,impressions,inline_link_clicks,frequency,reach,actions,action_values"
 )
 
 
@@ -136,6 +136,7 @@ def parse_insights_row(raw: dict, level: str) -> dict:
     """Meta ki ek insights row ko hamare Row shape mein badalta hai. Rates denominator 0 par None."""
     spend = _num(raw.get("spend"))
     impressions = int(_num(raw.get("impressions")))
+    reach = int(_num(raw.get("reach")))
     clicks = int(_num(raw.get("inline_link_clicks")))
     value = _action(raw.get("action_values"), "purchase")
     key = {"campaign": "campaign", "adset": "adset", "ad": "ad"}[level]
@@ -149,6 +150,8 @@ def parse_insights_row(raw: dict, level: str) -> dict:
         "spend": spend,
         "impressions": impressions,
         "link_clicks": clicks,
+        "reach": reach,
+        "frequency": _ratio(impressions, reach),
         "landing_page_views": int(_action(raw.get("actions"), "landing_page_view")),
         "add_to_cart": int(_action(raw.get("actions"), "add_to_cart")),
         "purchases": int(_action(raw.get("actions"), "purchase")),

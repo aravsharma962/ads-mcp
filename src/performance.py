@@ -8,7 +8,7 @@ from ads_api import MetaError, VALID_LEVELS, _check_date, _ratio, get_meta_insig
 from tenancy import norm_account
 
 SUM_FIELDS = ("spend", "impressions", "link_clicks", "landing_page_views", "add_to_cart", "purchases",
-              "purchase_value", "leads")
+              "purchase_value", "leads", "reach")
 LEAD_EVENTS = {"lead", "form_submit"}      # tracked lead = unique sessions with either event
 DENIED = {"error": "You do not have access to this client."}      # exist kare ya na kare, same jawab
 LEVEL_KEY = {"campaign": "campaign_id", "adset": "adset_id", "ad": "ad_id"}
@@ -31,6 +31,9 @@ def sum_rows(row_lists: list[list[dict]]) -> list[dict]:
         m["cpc"] = _ratio(m["spend"], m["link_clicks"])
         m["cpm"] = _ratio(m["spend"], m["impressions"], 1000)
         m["roas"] = _ratio(m["purchase_value"], m["spend"])
+        # reach is summed across accounts (approximation: people in two accounts count twice)
+        m["reach"] = m.get("reach") or 0
+        m["frequency"] = _ratio(m["impressions"], m["reach"])
     return list(merged.values())
 
 
@@ -68,6 +71,8 @@ def merge_performance(meta_rows: list[dict], events: dict, conversion_events: li
     unattributed = _bucket()
     conv = set(conversion_events or [])
     for e in events.get("events", []):
+        if e.get("name") == "page_leave":       # engagement ping only: never counts toward performance
+            continue
         key = e.get(key_field)
         b = buckets.setdefault(key, _bucket()) if key in known else unattributed
         sid = e.get("session_id")

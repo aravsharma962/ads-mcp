@@ -34,6 +34,7 @@ export type ClientRow = {
   timezone: string;
   roas_source: string;
   business_type: BusinessType;
+  action_rules?: unknown;
 };
 
 /** Tenant-scoped client lookup. A foreign or unknown id is indistinguishable: null. */

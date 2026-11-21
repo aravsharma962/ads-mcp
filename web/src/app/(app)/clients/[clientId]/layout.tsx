@@ -18,6 +18,10 @@ export default async function ClientLayout({
   if (!client) notFound();
   const tabs = [
     ["Dashboard", ""],
+    ["Actions", "/actions"],
+    ["Report", "/report"],
+    ["Site pages", "/pages"],
+    ["Leads", "/leads"],
     ["Targets", "/targets"],
     ["Accounts", "/accounts"],
     ["Assistant", "/assistant"],
@@ -29,7 +33,7 @@ export default async function ClientLayout({
         <Link href="/clients" className="text-sm text-gray-500">&larr; Clients</Link>
         <h1 className="text-2xl font-semibold">{client.name}</h1>
       </div>
-      <nav className="flex gap-4 border-b text-sm">
+      <nav className="flex flex-wrap gap-4 border-b text-sm print:hidden">
         {tabs.map(([label, path]) => (
           <Link key={label} href={`/clients/${client.id}${path}`} className="border-b-2 border-transparent px-1 pb-2 hover:border-black">
             {label}

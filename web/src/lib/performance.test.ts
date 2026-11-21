@@ -81,3 +81,29 @@ describe("normalizeUnattributed", () => {
     expect(normalizeUnattributed(null)).toBeNull();
   });
 });
+
+describe("frequency and reach", () => {
+  const s = { tracking: false, roasSource: "meta", type: "lead_gen" as const };
+  it("normalizeRow parses reach and frequency", () => {
+    const r = normalizeRow(raw({ reach: 5000, frequency: 2 }), s);
+    expect(r.reach).toBe(5000);
+    expect(r.frequency).toBe(2);
+  });
+  it("frequency is null when missing or 0, reach 0 when missing", () => {
+    const a = normalizeRow(raw(), s);
+    expect(a.frequency).toBeNull();
+    expect(a.reach).toBe(0);
+    expect(normalizeRow(raw({ frequency: 0, reach: 0 }), s).frequency).toBeNull();
+    expect(normalizeRow(raw({ frequency: "x", reach: "y" }), s).frequency).toBeNull();
+  });
+  it("sumRows sums reach and recomputes frequency from impressions", () => {
+    const rows = [normalizeRow(raw({ impressions: 1000, reach: 500 }), s), normalizeRow(raw({ impressions: 3000, reach: 1000 }), s)];
+    const t = sumRows(rows, s);
+    expect(t.reach).toBe(1500);
+    expect(t.frequency).toBeCloseTo(4000 / 1500);
+  });
+  it("sumRows frequency is null when reach is 0", () => {
+    expect(sumRows([normalizeRow(raw(), s)], s).frequency).toBeNull();
+    expect(sumRows([], s).frequency).toBeNull();
+  });
+});

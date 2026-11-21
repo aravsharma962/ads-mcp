@@ -28,6 +28,10 @@ export type PerfRow = {
   demo_sessions: number;
   lead_sessions: number;
   paid_events: number;
+  /** Unique people reached (hub field `reach`). */
+  reach: number;
+  /** Average impressions per person; null when Meta sent none or reach is 0. */
+  frequency: number | null;
   /** Effective counts used by the business-type metrics (tracked when the client has a site, else Meta). */
   leads: number;
   signups: number;
@@ -63,7 +67,7 @@ export function validateRange(from: string | null, to: string | null): { from: s
 }
 
 type Source = { tracking: boolean; roasSource: string; type?: BusinessType };
-type Base = Omit<PerfTotals, "rates" | keyof Counts>;
+type Base = Omit<PerfTotals, "rates" | "frequency" | keyof Counts>;
 
 /** Leads/signups: tracked sessions when the client has a site, else Meta's lead count (same pattern as roas_source). */
 function effectiveCounts(t: Base, tracking: boolean): Counts {
@@ -117,7 +121,9 @@ export function normalizeRow(raw: any, s: Source): PerfRow {
     demo_sessions: num(raw?.demo_sessions),
     lead_sessions: num(raw?.lead_sessions),
     paid_events: num(raw?.paid_events),
+    reach: num(raw?.reach),
   };
+  const frequency = num(raw?.frequency);
   return {
     id: str(raw?.id) ?? "unknown",
     name: str(raw?.name) ?? "(unnamed)",
@@ -126,6 +132,7 @@ export function normalizeRow(raw: any, s: Source): PerfRow {
     ad_id: str(raw?.ad_id),
     thumbnail_url: safeUrl(raw?.thumbnail_url),
     ...base,
+    frequency: frequency > 0 ? frequency : null,
     ...effectiveCounts(base, s.tracking),
     rates: totalsToRates(base, s),
   };
@@ -135,10 +142,11 @@ export function sumRows(rows: PerfRow[], s: Source): PerfTotals {
   const t = {
     spend: 0, impressions: 0, link_clicks: 0, landing_page_views: 0, add_to_cart: 0, purchases: 0,
     purchase_value: 0, sessions: 0, add_to_cart_sessions: 0, conversion_sessions: 0, tracked_value: 0,
-    meta_leads: 0, signup_sessions: 0, trial_sessions: 0, demo_sessions: 0, lead_sessions: 0, paid_events: 0,
+    meta_leads: 0, signup_sessions: 0, trial_sessions: 0, demo_sessions: 0, lead_sessions: 0, paid_events: 0, reach: 0,
   };
   for (const r of rows) for (const k of Object.keys(t) as (keyof typeof t)[]) t[k] += r[k];
-  return { ...t, ...effectiveCounts(t, s.tracking), rates: totalsToRates(t, s) };
+  const frequency = t.reach > 0 && t.impressions > 0 ? t.impressions / t.reach : null;
+  return { ...t, frequency, ...effectiveCounts(t, s.tracking), rates: totalsToRates(t, s) };
 }
 
 export function normalizeUnattributed(raw: any) {

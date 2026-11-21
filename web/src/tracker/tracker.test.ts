@@ -22,7 +22,30 @@ beforeEach(() => {
   Object.defineProperty(window.navigator, "sendBeacon", { value: beacon, configurable: true });
   delete (window as any).adsTrack;
 });
-afterEach(() => vi.useRealTimers());
+const pagehide: EventListener[] = [];
+const vis: EventListener[] = [];
+const realAdd = window.addEventListener.bind(window);
+const realDocAdd = document.addEventListener.bind(document);
+let hidden = false;
+beforeEach(() => {
+  hidden = false;
+  Object.defineProperty(document, "visibilityState", { get: () => (hidden ? "hidden" : "visible"), configurable: true });
+  vi.spyOn(window, "addEventListener").mockImplementation(((t: string, l: EventListener, o?: any) => {
+    if (t === "pagehide") pagehide.push(l);
+    realAdd(t, l, o);
+  }) as any);
+  vi.spyOn(document, "addEventListener").mockImplementation(((t: string, l: EventListener, o?: any) => {
+    if (t === "visibilitychange") vis.push(l);
+    realDocAdd(t, l, o);
+  }) as any);
+});
+const setHidden = (h: boolean) => { hidden = h; document.dispatchEvent(new Event("visibilitychange")); };
+afterEach(() => {
+  while (pagehide.length) window.removeEventListener("pagehide", pagehide.pop()!);   // one tracker per test
+  while (vis.length) document.removeEventListener("visibilitychange", vis.pop()!);
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 describe("tracker", () => {
   it("sends a page view on load with ad ids from utm parameters", () => {
@@ -124,5 +147,97 @@ describe("tracker", () => {
     expect(() => boot()).not.toThrow();
     expect(sent()).toHaveLength(1);
     spy.mockRestore();
+  });
+
+  describe("page_leave", () => {
+    const leaves = () => sent().filter((s) => s.body.event === "page_leave");
+
+    it("sends one page_leave on pagehide with whole seconds on the page, and not again", () => {
+      boot();
+      vi.advanceTimersByTime(12_700);
+      window.dispatchEvent(new Event("pagehide"));
+      window.dispatchEvent(new Event("pagehide"));
+      expect(leaves()).toHaveLength(1);
+      expect(leaves()[0].body).toMatchObject({ event: "page_leave", value: 12, currency: null });
+    });
+
+    it("sends page_leave when the page becomes hidden, once, even if pagehide follows", () => {
+      boot();
+      vi.advanceTimersByTime(5_200);
+      setHidden(true);
+      window.dispatchEvent(new Event("pagehide"));
+      setHidden(false);
+      setHidden(true);
+      expect(leaves()).toHaveLength(1);
+      expect(leaves()[0].body.value).toBe(5);
+    });
+
+    it("does nothing on visibilitychange to visible", () => {
+      boot();
+      setHidden(false);
+      expect(leaves()).toHaveLength(0);
+    });
+
+    it("sends page_leave from visibilitychange alone (no pagehide) with the visible seconds", () => {
+      boot();
+      vi.advanceTimersByTime(4_000);
+      setHidden(true);
+      expect(leaves()).toHaveLength(1);
+      expect(leaves()[0].body.value).toBe(4);
+    });
+
+    it("excludes hidden time when the page starts hidden then becomes visible", () => {
+      hidden = true;
+      boot();
+      vi.advanceTimersByTime(60_000);
+      setHidden(false);
+      vi.advanceTimersByTime(7_000);
+      window.dispatchEvent(new Event("pagehide"));
+      expect(leaves()[0].body.value).toBe(7);
+    });
+
+    it("manual consent: nothing on hidden before consent", () => {
+      boot("manual");
+      setHidden(true);
+      expect(beacon).not.toHaveBeenCalled();
+    });
+
+    it("never throws on visibilitychange when sendBeacon and fetch both fail", () => {
+      (beacon as any).mockImplementation(() => { throw new Error("boom"); });
+      const f = vi.spyOn(window as any, "fetch").mockImplementation(() => { throw new Error("nope"); });
+      boot();
+      expect(() => setHidden(true)).not.toThrow();
+      f.mockRestore();
+    });
+
+    it("caps value at 86400", () => {
+      boot();
+      vi.advanceTimersByTime(90_000_000);
+      window.dispatchEvent(new Event("pagehide"));
+      expect(leaves()[0].body.value).toBe(86400);
+    });
+
+    it("carries the first-touch ad ids and no personal keys", () => {
+      go("/?utm_content=333");
+      boot();
+      window.dispatchEvent(new Event("pagehide"));
+      const b = leaves()[0].body;
+      expect(b.ad_id).toBe("333");
+      expect(Object.keys(b).filter((k) => /^(email|phone|name)$/i.test(k))).toEqual([]);
+    });
+
+    it("sends nothing in manual consent mode before consent", () => {
+      boot("manual");
+      window.dispatchEvent(new Event("pagehide"));
+      expect(beacon).not.toHaveBeenCalled();
+    });
+
+    it("never throws when sendBeacon and fetch both fail", () => {
+      (beacon as any).mockImplementation(() => { throw new Error("boom"); });
+      const f = vi.spyOn(window as any, "fetch").mockImplementation(() => { throw new Error("nope"); });
+      boot();
+      expect(() => window.dispatchEvent(new Event("pagehide"))).not.toThrow();
+      f.mockRestore();
+    });
   });
 });

@@ -97,3 +97,11 @@ The collector never stores IP addresses, and rejects any payload with personal-d
 - Rate limits (collector: 60 events per minute per site key and session, 120 per visitor address, 1200 per site; assistant: 20 messages per minute per agency) are held in memory per serverless instance, so they limit bursts rather than giving exact global quotas.
 - Tracked numbers differ from Meta Ads Manager (ad blockers, missing URL parameters, consent choices). The Tracking page says so.
 - The MVP is read-only on Meta (`ads_read`).
+
+## Phase A (Actions, Report, Site pages, Leads)
+
+Order matters:
+1. Run `supabase/migrations/005_actions.sql` in the Supabase SQL editor (adds `clients.action_rules` and the `lead_marks` table).
+2. Deploy the hub (Vercel project for the repo root): it now returns `frequency` and `reach`, and ignores `page_leave` events.
+3. Deploy the web app (Vercel project with root directory `web`). `public/t.js` is rebuilt by `npm run build`; sites using the snippet pick up bounce tracking automatically (browsers may cache the old file for a while).
+4. `git add -f web/src/lib` (the local .gitignore ignores `lib/`).

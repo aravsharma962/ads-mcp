@@ -228,6 +228,18 @@ def test_hosted_tool_denies_foreign_account():
         assert len(seen) == n
 
 
+def test_parse_row_reach_and_frequency():
+    r = parse_insights_row({**RAW, "reach": "4000"}, "campaign")
+    assert r["reach"] == 4000 and r["frequency"] == 2.5, r          # impressions 10000 / reach 4000
+    assert "frequency" in ads_api.INSIGHTS_FIELDS and "reach" in ads_api.INSIGHTS_FIELDS.split(",")
+
+
+def test_parse_row_without_reach_has_no_frequency():
+    for raw in (RAW, {**RAW, "reach": "0"}, {}):
+        r = parse_insights_row(raw, "ad")
+        assert r["reach"] == 0 and r["frequency"] is None, r
+
+
 for name, fn in list(globals().items()):
     if name.startswith("test_"):
         fn()

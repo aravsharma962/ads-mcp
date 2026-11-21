@@ -169,7 +169,8 @@ class InMemoryStore:
         client = next((c for c in self.clients if c["id"] == client_id), None)
         start, end = date_bounds(date_from, date_to, client["timezone"] if client else None)
         evs = [{k: e.get(k) for k in ("session_id", "name", "campaign_id", "adset_id", "ad_id", "value")}
-               for e in self.events if e["client_id"] == client_id and start <= _parse_ts(e["ts"]) < end]
+               for e in self.events if e["client_id"] == client_id and e.get("name") != "page_leave"
+               and start <= _parse_ts(e["ts"]) < end]
         conv = sorted({x for s in self.sites if s["client_id"] == client_id for x in s["conversion_events"]})
         return {"level": level, "events": evs, "conversion_events": conv or list(DEFAULT_CONVERSION_EVENTS)}
 
@@ -280,7 +281,7 @@ class SupabaseStore:
         evs, offset, page = [], 0, 1000
         while True:             # PostgREST ek baar mein max 1000 rows deta hai
             chunk = (self.db.table("events").select(EVENT_FIELDS).eq("client_id", client_id)
-                     .gte("ts", start.isoformat()).lt("ts", end.isoformat()).order("id")
+                     .neq("name", "page_leave").gte("ts", start.isoformat()).lt("ts", end.isoformat()).order("id")
                      .range(offset, offset + page - 1).execute().data)
             evs.extend({k: e.get(k) for k in ("session_id", "name", "campaign_id", "adset_id", "ad_id", "value")}
                        for e in chunk)

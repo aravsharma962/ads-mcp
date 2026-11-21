@@ -6,11 +6,12 @@ import { createLimiter } from "@/lib/ratelimit";
 export const dynamic = "force-dynamic";
 
 const MAX_BODY = 4096;
-const EVENTS = ["page_view", "add_to_cart", "form_submit", "purchase", "signup", "trial_start", "demo_booked", "lead", "paid"] as const;
+const EVENTS = ["page_view", "add_to_cart", "form_submit", "purchase", "signup", "trial_start", "demo_booked", "lead", "paid", "page_leave"] as const;
 const PERSONAL = /^(e-?mail|phone|mobile|tel|name|first_?name|last_?name|full_?name)$/i;
 const limiter = createLimiter({ limit: 60, windowMs: 60_000 });
 const siteBudget = createLimiter({ limit: 1200, windowMs: 60_000 });          // all events of one site key
 const ipLimiter = createLimiter({ limit: 120, windowMs: 60_000 });             // one visitor address per site
+const MAX_LEAVE_SECONDS = 86_400;                 // page_leave value = seconds on the page
 const MAX_PURCHASE_VALUE = 10_000_000;            // applies to purchase and paid
 // The salt lives only in this process's memory and the limiter keys are hashes: raw IPs are never kept or stored.
 const IP_SALT = randomBytes(16);
@@ -109,6 +110,7 @@ export async function POST(request: Request) {
   const e = parsed.data;
 
   if ((e.event === "purchase" || e.event === "paid") && e.value !== null && e.value > MAX_PURCHASE_VALUE) return text(400, "Implausible purchase value.");
+  if (e.event === "page_leave" && e.value !== null && e.value > MAX_LEAVE_SECONDS) return text(400, "Implausible page time.");
   const ipk = ipKey(request, siteKey);
   if (ipk && !ipLimiter.hit(ipk)) return text(429, "Too many events.");
   if (!siteBudget.hit(siteKey)) return text(429, "Too many events.");

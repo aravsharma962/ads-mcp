@@ -174,3 +174,29 @@ describe("OPTIONS /api/collect", () => {
     expect((await pre(null)).status).toBe(403);
   });
 });
+
+describe("POST /api/collect page_leave", () => {
+  it("accepts page_leave with whole seconds up to 86400 and stores it as a normal event", async () => {
+    for (const v of [0, 7, 86400]) expect((await post(body({ event: "page_leave", value: v }))).status).toBe(204);
+    const rows = db.rows("events").filter((r) => r.name === "page_leave");
+    expect(rows.map((r) => r.value)).toEqual([0, 7, 86400]);
+  });
+
+  it.each([86401, -1, 1e9])("page_leave value %s -> 400 and nothing stored", async (v) => {
+    expect((await post(body({ event: "page_leave", value: v }))).status).toBe(400);
+    expect(db.rows("events")).toHaveLength(0);
+  });
+
+  it("page_leave with NaN (serialised as null) value is stored without a value; Infinity string is rejected", async () => {
+    expect((await post(body({ event: "page_leave", value: "NaN" }))).status).toBe(400);
+    expect((await post(body({ event: "page_leave", value: null }))).status).toBe(204);
+  });
+
+  it("other events keep their own limits (page_view 1e9 still fine)", async () => {
+    expect((await post(body({ event: "page_view", value: 100000 }))).status).toBe(204);
+  });
+
+  it("page_leave still rejects personal-data fields", async () => {
+    expect((await post(body({ event: "page_leave", value: 5, email: "a@b.c" }))).status).toBe(400);
+  });
+});

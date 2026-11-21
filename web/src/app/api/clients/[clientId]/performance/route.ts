@@ -1,6 +1,6 @@
 import { apiContext, getOwnedClient, json, notFound } from "@/lib/api";
-import { HubError, callTool } from "@/lib/hub";
-import { LEVELS, normalizeRow, normalizeUnattributed, sumRows, validateRange, type Level } from "@/lib/performance";
+import { fetchPerformance, hubFailure } from "@/lib/actions/data";
+import { LEVELS, validateRange, type Level } from "@/lib/performance";
 
 type Ctx = { params: Promise<{ clientId: string }> };
 
@@ -16,40 +16,13 @@ export async function GET(request: Request, { params }: Ctx) {
   if (!range) return json({ error: "Enter a valid date range of at most 366 days." }, 400);
   if (!level || !LEVELS.includes(level)) return json({ error: "Level must be campaign, adset or ad." }, 400);
 
-  const { data: accRows } = await a.db.from("client_accounts").select("external_id").eq("client_id", client.id);
-  const accounts = ((accRows ?? []) as { external_id: string }[]).map((r) => r.external_id);
-  const { data: site } = await a.db.from("sites").select("id").eq("client_id", client.id).maybeSingle();
-  const tracking = !!site;
-  const type = client.business_type;
-  const src = { tracking, roasSource: client.roas_source, type };
-
-  let currency = client.currency;
-  let rawRows: unknown[] = [];
-  let unattributed = null;
   try {
-    if (accounts.length > 0) {
-      if (tracking) {
-        const res = await callTool(a.ctx.tenantId, "ads_performance", {
-          client_id: client.id, date_from: range.from, date_to: range.to, level,
-        });
-        rawRows = Array.isArray(res?.rows) ? res.rows : [];
-        unattributed = normalizeUnattributed(res?.unattributed);
-        if (typeof res?.currency === "string") currency = res.currency;
-      } else {
-        for (const externalId of accounts) {
-          const res = await callTool(a.ctx.tenantId, "meta_ads_insights", {
-            external_id: externalId, date_from: range.from, date_to: range.to, level,
-          });
-          if (Array.isArray(res?.rows)) rawRows.push(...res.rows);
-          if (typeof res?.currency === "string") currency = res.currency;
-        }
-      }
-    }
+    const p = await fetchPerformance(a, client, range, level);
+    return json({
+      currency: p.currency, tracking: p.tracking, business_type: p.business_type, level,
+      attribution: "account default", rows: p.rows, totals: p.totals, unattributed: p.unattributed,
+    });
   } catch (e) {
-    const status = e instanceof HubError && e.status === 429 ? 429 : 502;
-    return json({ error: "Could not load performance data right now. Try again in a moment." }, status);
+    return hubFailure(e);
   }
-
-  const rows = rawRows.map((r) => normalizeRow(r, src));
-  return json({ currency, tracking, business_type: type, level, attribution: "account default", rows, totals: sumRows(rows, src), unattributed });
 }

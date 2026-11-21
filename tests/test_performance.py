@@ -166,6 +166,7 @@ store.add_event(ca["id"], "s1", "page_view", ad_id="X", adset_id="s1", campaign_
 store.add_event(ca["id"], "s1", "purchase", ad_id="X", adset_id="s1", campaign_id="c1", value=250.0,
                 ts="2026-11-03T10:05:00+00:00")
 store.add_event(ca["id"], "s9", "page_view", ts="2026-11-04T10:00:00+00:00")                 # unattributed
+store.add_event(ca["id"], "s_leave", "page_leave", ts="2026-11-04T10:05:00+00:00")           # must be excluded
 store.add_event(ca["id"], "old", "page_view", ad_id="X", ts="2026-10-01T10:00:00+00:00")     # range ke bahar
 store.add_event(cb["id"], "b1", "purchase", ad_id="X", value=777.0, ts="2026-11-03T10:00:00+00:00")  # doosra client
 
@@ -279,6 +280,59 @@ def test_store_isolation_and_range():
     assert s["level"] == "ad"
     s2 = store.events_summary(ca["id"], "2026-11-03", "2026-11-03", "ad")      # inclusive single day (IST)
     assert {e["session_id"] for e in s2["events"]} == {"s1"}
+
+
+def test_events_summary_excludes_page_leave():
+    s = store.events_summary(ca["id"], "2026-11-01", "2026-11-07", "ad")
+    assert all(e["name"] != "page_leave" for e in s["events"]), s["events"]
+    assert "s_leave" not in {e["session_id"] for e in s["events"]}
+
+
+def test_supabase_events_summary_filters_page_leave():
+    from store import SupabaseStore
+    calls = []
+
+    class Q:
+        def __init__(self, data): self.data = data
+        def __getattr__(self, n):
+            def f(*a, **k):
+                calls.append((n, a))
+                return self
+            return f
+        def execute(self):
+            return MagicMock(data=self.data)
+
+    class DB:
+        def table(self, name):
+            return Q([{"timezone": "Asia/Kolkata"}] if name == "clients" else [])
+
+    st = SupabaseStore.__new__(SupabaseStore)
+    st.db = DB()
+    st.events_summary("c", "2026-11-01", "2026-11-07", "ad")
+    assert ("neq", ("name", "page_leave")) in calls, calls
+
+
+def test_merge_ignores_page_leave():
+    e = events(ev("s1", "page_view"), ev("s2", "page_leave"), ev("s1", "page_leave"))
+    r = one(merge_performance([meta_row()], e, CONV))
+    assert r["sessions"] == 1, r
+    lone = merge_performance([meta_row()], events(ev("s3", "page_leave")), CONV)
+    assert one(lone)["sessions"] == 0 and lone["unattributed"]["sessions"] == 0, lone
+
+
+def test_merge_sums_reach_and_recomputes_frequency():
+    a = {**meta_row(), "reach": 4000, "frequency": 2.5}          # impressions 10000
+    b = {**meta_row(), "reach": 1000, "frequency": 10.0}         # same ad id in a second account
+    out = sum_rows([[a], [b]])
+    assert len(out) == 1 and out[0]["reach"] == 5000 and out[0]["impressions"] == 20000
+    assert out[0]["frequency"] == 4.0, out[0]                    # 20000 / 5000
+
+
+def test_merge_frequency_none_when_reach_zero_or_missing():
+    out = sum_rows([[{**meta_row(), "reach": 0, "frequency": None}], [meta_row()]])
+    assert out[0]["reach"] == 0 and out[0]["frequency"] is None, out[0]
+    single = sum_rows([[meta_row()]])
+    assert single[0]["frequency"] is None
 
 
 for name, fn in list(globals().items()):
